@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer Tactical Radar Reticle -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="1.8"
+        android:strokeAlpha="0.8"
+        android:pathData="M34,26 A30,30 0 0,1 74,26 M82,34 A30,30 0 0,1 82,74 M74,82 A30,30 0 0,1 34,82 M26,74 A30,30 0 0,1 26,34" />
+
+    <!-- Corner HUD Marks -->
+    <path
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="2.0"
+        android:pathData="M27,27 L33,27 M27,27 L27,33 M81,27 L75,27 M81,27 L81,33 M27,81 L33,81 M27,81 L27,75 M81,81 L75,81 M81,81 L81,75" />
+
+    <!-- Cognitive Revision Loop Arc 1 -->
+    <path
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:pathData="M40,36 C48,28 62,28 70,36 C76,42 77,50 73,57" />
+
+    <!-- Revision Arrow Head 1 -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M73,57 L78,51 L71,49 Z" />
+
+    <!-- Cognitive Revision Loop Arc 2 -->
+    <path
+        android:strokeColor="#10B981"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:pathData="M68,72 C60,80 46,80 38,72 C32,66 31,58 35,51" />
+
+    <!-- Revision Arrow Head 2 -->
+    <path
+        android:fillColor="#10B981"
+        android:pathData="M35,51 L30,57 L37,59 Z" />
+
+    <!-- Center Cognitive Core Node -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M54,46 L61,54 L54,62 L47,54 Z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,51 A3,3 0 1,1 54,57 A3,3 0 1,1 54,51" />
+</vector>

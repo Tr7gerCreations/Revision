@@ -1,0 +1,1903 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Dynamic DSR v3.0</title>
+  <style>
+    /* Tactical Dark HUD Design System */
+    :root {
+      --bg-base: #0B0F17;
+      --bg-card: #131B2B;
+      --bg-card-hover: #1A2438;
+      --bg-surface: #1E293B;
+      --border-subtle: #243247;
+      --border-accent: #334155;
+      --text-main: #F1F5F9;
+      --text-muted: #94A3B8;
+      --text-dim: #64748B;
+      --cyan-core: #38BDF8;
+      --cyan-glow: rgba(56, 189, 248, 0.15);
+      --amber-hazard: #F59E0B;
+      --amber-glow: rgba(245, 158, 11, 0.15);
+      --red-urgent: #EF4444;
+      --red-glow: rgba(239, 68, 68, 0.18);
+      --emerald-retained: #10B981;
+      --emerald-glow: rgba(16, 185, 129, 0.15);
+      --purple-synthesis: #8B5CF6;
+      --purple-glow: rgba(139, 92, 246, 0.18);
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    input, textarea, select {
+      user-select: text;
+    }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.45;
+      overflow-x: hidden;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: max(96px, calc(80px + env(safe-area-inset-bottom, 0px)));
+    }
+
+    /* Telemetry HUD Typography */
+    .mono {
+      font-family: var(--font-mono);
+      letter-spacing: -0.02em;
+    }
+
+    /* App Header with guaranteed status bar clearance */
+    .app-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(11, 15, 23, 0.98);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border-subtle);
+      padding-top: max(48px, calc(36px + env(safe-area-inset-top, 0px)));
+      padding-bottom: 12px;
+      padding-left: 16px;
+      padding-right: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      color: var(--text-main);
+    }
+
+    .brand-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan-core);
+      box-shadow: 0 0 8px var(--cyan-core);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .icon-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      width: 38px;
+      height: 38px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .icon-btn:active {
+      transform: scale(0.92);
+      border-color: var(--cyan-core);
+      color: var(--cyan-core);
+    }
+
+    /* Main Container */
+    .view-container {
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      max-width: 600px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* Top Countdown & Health Banner */
+    .countdown-banner {
+      background: linear-gradient(135deg, #131E33 0%, #17233B 100%);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: var(--radius-lg);
+      padding: 14px;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      transition: border-color 0.2s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .countdown-banner::after {
+      content: "";
+      position: absolute;
+      top: -20px;
+      right: -20px;
+      width: 80px;
+      height: 80px;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.18) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .countdown-banner:active {
+      border-color: var(--cyan-core);
+    }
+
+    .countdown-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .exam-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--cyan-core);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .days-badge {
+      background: rgba(245, 158, 11, 0.2);
+      color: #FCD34D;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .retention-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .retention-value {
+      color: var(--text-main);
+      font-weight: 700;
+    }
+
+    .health-gauge-track {
+      height: 7px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .health-gauge-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #10B981, #38BDF8);
+      border-radius: 999px;
+      transition: width 0.4s ease;
+    }
+
+    /* Daily Budget Bar */
+    .budget-bar-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .budget-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+    }
+
+    .budget-title {
+      color: var(--text-muted);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .budget-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .budget-stepper-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-accent);
+      color: var(--text-main);
+      width: 26px;
+      height: 26px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 14px;
+    }
+
+    .budget-stepper-btn:active {
+      background: var(--cyan-core);
+      color: #000;
+    }
+
+    .budget-progress-track {
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .budget-progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.3s ease, background 0.3s ease;
+    }
+
+    /* Synthesis Boss Battle Banner */
+    .synthesis-banner {
+      background: linear-gradient(135deg, rgba(139, 92, 246, 0.22) 0%, rgba(30, 27, 75, 0.6) 100%);
+      border: 1px solid rgba(139, 92, 246, 0.45);
+      border-radius: var(--radius-lg);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 4px 18px rgba(139, 92, 246, 0.15);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .synthesis-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .synthesis-badge {
+      background: var(--purple-synthesis);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+
+    .synthesis-btn {
+      background: var(--purple-synthesis);
+      border: none;
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 8px 12px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 2px 10px rgba(139, 92, 246, 0.4);
+    }
+
+    .synthesis-btn:active {
+      transform: scale(0.97);
+    }
+
+    /* Section Titles */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 4px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Queue Chapter Cards */
+    .queue-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .chapter-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 13px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      position: relative;
+    }
+
+    .chapter-card:active {
+      transform: scale(0.985);
+      border-color: var(--cyan-core);
+      background: var(--bg-card-hover);
+    }
+
+    .card-top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: var(--radius-sm);
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .status-badge.urgent {
+      background: var(--red-glow);
+      color: #F87171;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+    }
+
+    .status-badge.due {
+      background: var(--amber-glow);
+      color: #FBBF24;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+    }
+
+    .status-badge.healthy {
+      background: var(--emerald-glow);
+      color: #34D399;
+      border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+
+    .status-badge.synthesis {
+      background: var(--purple-glow);
+      color: #C084FC;
+      border: 1px solid rgba(139, 92, 246, 0.4);
+    }
+
+    .tier-badge {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-muted);
+      border: 1px solid var(--border-subtle);
+      padding: 2px 6px;
+      border-radius: var(--radius-sm);
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    .chapter-main-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .chapter-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .subject-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .subject-pill.physics {
+      background: rgba(56, 189, 248, 0.12);
+      color: #38BDF8;
+      border: 1px solid rgba(56, 189, 248, 0.25);
+    }
+
+    .subject-pill.chemistry {
+      background: rgba(16, 185, 129, 0.12);
+      color: #34D399;
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+
+    .subject-pill.mathematics {
+      background: rgba(245, 158, 11, 0.12);
+      color: #FBBF24;
+      border: 1px solid rgba(245, 158, 11, 0.25);
+    }
+
+    /* Warning & Fault-Line Banners inside card */
+    .trap-risk-pill {
+      background: rgba(245, 158, 11, 0.14);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #FCD34D;
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .fault-lines-pill {
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      color: #7DD3FC;
+      padding: 5px 8px;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .prescribed-task-line {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      border-top: 1px dashed var(--border-subtle);
+      padding-top: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Lapsed Slot */
+    .lapsed-slot {
+      background: rgba(239, 68, 68, 0.05);
+      border: 1px dashed rgba(239, 68, 68, 0.35);
+      border-radius: var(--radius-lg);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .lapsed-slot-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 700;
+      color: #F87171;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    /* Bottom Navigation Bar */
+    .bottom-nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 60;
+      background: rgba(11, 15, 23, 0.96);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      height: auto;
+      min-height: 62px;
+      padding-top: 6px;
+      padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+
+    .nav-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      flex: 1;
+      padding: 6px 0;
+      transition: color 0.15s ease;
+    }
+
+    .nav-item.active {
+      color: var(--cyan-core);
+    }
+
+    .nav-item:active {
+      transform: scale(0.94);
+    }
+
+    /* Floating Action Button */
+    .fab-btn {
+      position: fixed;
+      bottom: max(88px, calc(78px + env(safe-area-inset-bottom, 0px)));
+      right: 18px;
+      z-index: 70;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #0284C7, #06B6D4);
+      border: none;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 6px 20px rgba(6, 182, 212, 0.45);
+      transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .fab-btn:active {
+      transform: scale(0.9);
+    }
+
+    .fab-btn.open {
+      transform: rotate(45deg);
+      background: #EF4444;
+      box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+    }
+
+    /* FAB Speed Dial Overlay & Menu */
+    .fab-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 69;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    .fab-overlay.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .speed-dial-menu {
+      position: fixed;
+      bottom: max(152px, calc(142px + env(safe-area-inset-bottom, 0px)));
+      right: 18px;
+      z-index: 70;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(16px);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .speed-dial-menu.show {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .speed-dial-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+
+    .speed-dial-label {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-accent);
+      color: var(--text-main);
+      padding: 6px 12px;
+      border-radius: var(--radius-md);
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      white-space: nowrap;
+    }
+
+    .speed-dial-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--bg-card);
+      border: 1px solid var(--border-accent);
+      color: var(--cyan-core);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Modals & Bottom Sheets */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s ease;
+    }
+
+    .modal-backdrop.show {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal-sheet {
+      background: #111726;
+      border-top: 1px solid var(--border-accent);
+      border-radius: 20px 20px 0 0;
+      width: 100%;
+      max-width: 600px;
+      max-height: 90vh;
+      overflow-y: auto;
+      padding: 20px 18px 30px;
+      box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.7);
+      transform: translateY(100%);
+      transition: transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .modal-backdrop.show .modal-sheet {
+      transform: translateY(0);
+    }
+
+    .sheet-handle {
+      width: 40px;
+      height: 4px;
+      background: var(--border-accent);
+      border-radius: 999px;
+      margin: -8px auto 6px;
+    }
+
+    .sheet-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 10px;
+    }
+
+    .sheet-title {
+      font-size: 17px;
+      font-weight: 800;
+      color: var(--text-main);
+    }
+
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Form Fields & Controls */
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .form-input, .form-select, .form-textarea {
+      background: var(--bg-card);
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius-md);
+      color: var(--text-main);
+      padding: 10px 12px;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .form-input:focus, .form-select:focus, .form-textarea:focus {
+      border-color: var(--cyan-core);
+    }
+
+    .segmented-control {
+      display: flex;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 3px;
+      gap: 4px;
+    }
+
+    .segmented-option {
+      flex: 1;
+      text-align: center;
+      padding: 8px 4px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .segmented-option.active {
+      background: var(--cyan-core);
+      color: #000;
+    }
+
+    /* Rigor Pill Grid for Material Difficulty Calibration */
+    .rigor-pill-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .rigor-pill-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 9px 10px;
+      text-align: left;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      transition: all 0.2s ease;
+      color: var(--text-muted);
+      outline: none;
+    }
+
+    .rigor-pill-btn:hover {
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+
+    .rigor-pill-btn.active {
+      background: rgba(56, 189, 248, 0.12);
+      border-color: var(--cyan-core);
+      color: var(--text-main);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.15);
+    }
+
+    .rigor-pill-title {
+      font-size: 11.5px;
+      font-weight: 700;
+      line-height: 1.25;
+      color: var(--text-muted);
+    }
+
+    .rigor-pill-btn.active .rigor-pill-title {
+      color: var(--cyan-core);
+    }
+
+    .rigor-pill-desc {
+      font-size: 10px;
+      color: var(--text-dim);
+      line-height: 1.2;
+    }
+
+    .rigor-pill-btn.active .rigor-pill-desc {
+      color: #CBD5E1;
+    }
+
+    /* Sliders */
+    .range-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .range-input {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      background: var(--bg-surface);
+      border-radius: 999px;
+      outline: none;
+    }
+
+    .range-input::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--cyan-core);
+      cursor: pointer;
+      box-shadow: 0 0 10px var(--cyan-core);
+    }
+
+    /* Live Preview Box */
+    .preview-box {
+      background: rgba(56, 189, 248, 0.06);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: var(--radius-md);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+    }
+
+    .preview-title {
+      font-weight: 800;
+      color: var(--cyan-core);
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+    }
+
+    .preview-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-muted);
+    }
+
+    .preview-val {
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .action-btn {
+      background: linear-gradient(135deg, #0284C7, #06B6D4);
+      border: none;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      padding: 12px 16px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 14px rgba(6, 182, 212, 0.35);
+    }
+
+    .action-btn:active {
+      transform: scale(0.98);
+    }
+
+    .secondary-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-accent);
+      color: var(--text-main);
+      font-size: 14px;
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+
+    .danger-btn {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      color: #F87171;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 10px 14px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+    }
+
+    /* Stopwatch Component */
+    .stopwatch-widget {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .stopwatch-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .stopwatch-display {
+      font-size: 26px;
+      font-weight: 800;
+      color: var(--cyan-core);
+      text-align: center;
+    }
+
+    .stopwatch-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .stopwatch-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-accent);
+      color: var(--text-main);
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* Star / Rating Buttons */
+    .star-rating-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .star-btn {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border-accent);
+      color: var(--text-muted);
+      border-radius: var(--radius-md);
+      padding: 10px 4px;
+      text-align: center;
+      font-size: 16px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .star-btn.active {
+      background: var(--amber-hazard);
+      border-color: var(--amber-hazard);
+      color: #000;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+    }
+
+    /* Number Stepper Control */
+    .number-stepper {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stepper-btn {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-accent);
+      color: var(--text-main);
+      width: 36px;
+      height: 36px;
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .stepper-val {
+      min-width: 48px;
+      text-align: center;
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--text-main);
+    }
+
+    /* Audit Log Table/Cards */
+    .audit-filter-row {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      scrollbar-width: none;
+    }
+
+    .audit-filter-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .audit-filter-pill.active {
+      background: var(--cyan-core);
+      color: #000;
+      border-color: var(--cyan-core);
+    }
+
+    .log-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 13px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      font-size: 12.5px;
+    }
+
+    .log-top-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .log-badge {
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+
+    .log-entry-path {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+
+    .log-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .log-narrative {
+      color: #F1F5F9;
+      font-size: 12.5px;
+      line-height: 1.45;
+      background: rgba(0, 0, 0, 0.24);
+      border-left: 3px solid var(--cyan-core);
+      padding: 8px 10px;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    }
+
+    .log-chips-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .log-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      padding: 2px 7px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    .log-json-toggle {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 0;
+    }
+
+    .log-json-toggle:hover {
+      color: var(--cyan-core);
+    }
+
+    .log-details-table {
+      display: none;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: var(--radius-sm);
+      padding: 8px;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      word-break: break-all;
+    }
+
+    .log-details-table.open {
+      display: block;
+    }
+
+    /* Views visibility */
+    .view-section {
+      display: none;
+    }
+
+    .view-section.active {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* Checkbox styled */
+    .custom-checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+
+    .custom-checkbox-row input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--cyan-core);
+    }
+
+    /* Toast Notification */
+    .toast-popup {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-30px);
+      background: rgba(19, 27, 43, 0.95);
+      border: 1px solid var(--cyan-core);
+      color: var(--text-main);
+      padding: 10px 16px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .toast-popup.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Toast Notification Container -->
+  <div id="toastPopup" class="toast-popup">Notification</div>
+
+  <!-- App Header -->
+  <header class="app-header">
+    <div class="brand-title">
+      <div class="brand-dot"></div>
+      <span>REVISION <span style="color: var(--cyan-core); font-size: 11px; font-weight: 700;">v3.0</span></span>
+    </div>
+    <div class="header-actions">
+      <button id="btnHeaderAudit" class="icon-btn" title="Audit Log">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </button>
+      <button id="btnHeaderSettings" class="icon-btn" title="Exam Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="4" y1="21" x2="4" y2="14"></line>
+          <line x1="4" y1="10" x2="4" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12" y2="3"></line>
+          <line x1="20" y1="21" x2="20" y2="16"></line>
+          <line x1="20" y1="12" x2="20" y2="3"></line>
+          <line x1="1" y1="14" x2="7" y2="14"></line>
+          <line x1="9" y1="8" x2="15" y2="8"></line>
+          <line x1="17" y1="16" x2="23" y2="16"></line>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="view-container">
+
+    <!-- VIEW 1: TO-DO DASHBOARD -->
+    <section id="viewDashboard" class="view-section active">
+      
+      <!-- Top Exam Countdown & Health Banner (Tappable) -->
+      <div id="topCountdownBanner" class="countdown-banner" title="Tap to calibrate exam target">
+        <div class="countdown-header">
+          <span id="bannerExamTitle" class="exam-label">JEE ADVANCED 2027</span>
+          <span id="bannerDaysLeft" class="days-badge mono">-- DAYS LEFT</span>
+        </div>
+        <div class="retention-row">
+          <span>Target Retention: <strong id="bannerTargetRetention" class="retention-value mono">90%</strong></span>
+          <span>Syllabus Health: <strong id="bannerHealthPct" class="retention-value mono">--%</strong></span>
+        </div>
+        <div class="health-gauge-track">
+          <div id="bannerHealthFill" class="health-gauge-fill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <!-- Daily Time Budget Bar -->
+      <div class="budget-bar-card">
+        <div class="budget-header">
+          <div class="budget-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--cyan-core)" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <span>DAILY TIME BUDGET</span>
+          </div>
+          <div class="budget-controls">
+            <span id="budgetDurationText" class="mono" style="font-weight: 700; color: var(--text-main);">0 / 90 min</span>
+            <button id="btnBudgetDec" class="budget-stepper-btn" title="Decrease Budget">-</button>
+            <button id="btnBudgetInc" class="budget-stepper-btn" title="Increase Budget">+</button>
+          </div>
+        </div>
+        <div class="budget-progress-track">
+          <div id="budgetProgressFill" class="budget-progress-fill" style="width: 0%; background: var(--cyan-core);"></div>
+        </div>
+      </div>
+
+      <!-- Synthesis Boss Battle Banner (Conditional) -->
+      <div id="synthesisBanner" class="synthesis-banner" style="display: none;">
+        <div class="synthesis-title-row">
+          <span class="synthesis-badge">SYNTHESIS BOSS BATTLE AVAILABLE</span>
+          <span class="mono" style="font-size: 11px; color: #C084FC;">1.25x Stability Multiplier</span>
+        </div>
+        <p id="synthesisBannerText" style="font-size: 12px; color: #E9D5FF; line-height: 1.4;">
+          2 mature chapters due within 4 days. Interleave them to cement cross-chapter synthesis!
+        </p>
+        <button id="btnLaunchSynthesis" class="synthesis-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          Launch Synthesis Battle
+        </button>
+      </div>
+
+      <!-- Today's Priority Queue -->
+      <div class="section-header">
+        <span class="section-title">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+          </svg>
+          TODAY'S PRIORITY QUEUE
+        </span>
+        <span id="queueCountLabel" class="mono" style="font-size: 11px; color: var(--text-dim);">0 topics due</span>
+      </div>
+
+      <div id="queueListContainer" class="queue-list">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <!-- Lapsed Rebuild Slot (Capped 1/day) -->
+      <div id="lapsedSlotContainer" class="lapsed-slot" style="display: none;">
+        <div class="lapsed-slot-header">
+          <span>⚠️ LAPSED REBUILD SLOT (R &lt; 65%)</span>
+          <span style="font-size: 10px; color: var(--text-dim);">Capped 1/day to prevent churn</span>
+        </div>
+        <div id="lapsedCardContent"></div>
+      </div>
+
+    </section>
+
+    <!-- VIEW 2: SYLLABUS REVISION -->
+    <section id="viewSyllabus" class="view-section">
+      <div class="section-header">
+        <span class="section-title">SYLLABUS REVISION</span>
+        <span id="syllabusCountLabel" class="mono" style="font-size: 11px; color: var(--text-dim);">4 Chapters</span>
+      </div>
+
+      <!-- Subject Filter Tabs -->
+      <div class="audit-filter-row">
+        <div class="audit-filter-pill active" data-subject-filter="ALL">All Subjects</div>
+        <div class="audit-filter-pill" data-subject-filter="Physics">Physics</div>
+        <div class="audit-filter-pill" data-subject-filter="Chemistry">Chemistry</div>
+        <div class="audit-filter-pill" data-subject-filter="Mathematics">Mathematics</div>
+      </div>
+
+      <div id="syllabusListContainer" class="queue-list">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+    <!-- VIEW 3: AUDIT -->
+    <section id="viewAudit" class="view-section">
+      <div class="section-header">
+        <span class="section-title">AUDIT</span>
+        <span id="auditCountLabel" class="mono" style="font-size: 11px; color: var(--text-dim);">0 Records</span>
+      </div>
+
+      <!-- Action Type Filter Pills -->
+      <div class="audit-filter-row">
+        <div class="audit-filter-pill active" data-audit-filter="ALL">All Events</div>
+        <div class="audit-filter-pill" data-audit-filter="NEW_CHAPTER">New Chapters</div>
+        <div class="audit-filter-pill" data-audit-filter="POST_STUDY_REVIEW">Reviews</div>
+        <div class="audit-filter-pill" data-audit-filter="MOCK_TEST_LOG">Mock Tests</div>
+        <div class="audit-filter-pill" data-audit-filter="EXAM_SETTINGS_UPDATE">Settings</div>
+      </div>
+
+      <!-- Search Input -->
+      <input id="auditSearchInput" type="text" class="form-input" placeholder="Search audit logs by chapter, note, date..." />
+
+      <!-- Export / Import Action Row -->
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button id="btnExportJSON" class="secondary-btn" style="flex: 1; min-width: 90px; font-size: 11px; padding: 7px 8px;">
+          ⬇ Export JSON
+        </button>
+        <button id="btnExportCSV" class="secondary-btn" style="flex: 1; min-width: 90px; font-size: 11px; padding: 7px 8px;">
+          ⬇ Export CSV
+        </button>
+        <button id="btnTriggerImport" class="secondary-btn" style="flex: 1; min-width: 100px; font-size: 11px; padding: 7px 8px;">
+          ⬆ Restore Backup
+        </button>
+        <button id="btnClearAllAudit" class="secondary-btn" style="flex: 1; min-width: 90px; font-size: 11px; padding: 7px 8px; color: #F87171;" title="Clear entire audit ledger">
+          🗑️ Clear All
+        </button>
+        <input id="fileImportInput" type="file" accept=".json" style="display: none;" />
+      </div>
+
+      <div id="auditLogListContainer" class="queue-list">
+        <!-- Rendered dynamically -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- FAB (+) Button and Speed Dial Menu -->
+  <div id="fabOverlay" class="fab-overlay"></div>
+
+  <div id="speedDialMenu" class="speed-dial-menu">
+    <div id="dialNewChapter" class="speed-dial-item">
+      <span class="speed-dial-label">Add New Chapter (Day 0)</span>
+      <div class="speed-dial-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+      </div>
+    </div>
+    <div id="dialMockTest" class="speed-dial-item">
+      <span class="speed-dial-label">Log Mock Test (Post-Mortem)</span>
+      <div class="speed-dial-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+          <polyline points="14 2 14 8 20 8"></polyline>
+          <line x1="16" y1="13" x2="8" y2="13"></line>
+          <line x1="16" y1="17" x2="8" y2="17"></line>
+          <polyline points="10 9 9 9 8 9"></polyline>
+        </svg>
+      </div>
+    </div>
+    <div id="dialAdHoc" class="speed-dial-item">
+      <span class="speed-dial-label">Ad-Hoc Review (Any Chapter)</span>
+      <div class="speed-dial-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <button id="mainFabBtn" class="fab-btn" title="Actions">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <line x1="12" y1="5" x2="12" y2="19"></line>
+      <line x1="5" y1="12" x2="19" y2="12"></line>
+    </svg>
+  </button>
+
+  <!-- Bottom Navigation Bar -->
+  <nav class="bottom-nav">
+    <div id="navTabDashboard" class="nav-item active">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="16" y1="2" x2="16" y2="6"></line>
+        <line x1="8" y1="2" x2="8" y2="6"></line>
+        <line x1="3" y1="10" x2="21" y2="10"></line>
+      </svg>
+      <span>To-Do Queue</span>
+    </div>
+    <div id="navTabSyllabus" class="nav-item">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+        <polyline points="2 17 12 22 22 17"></polyline>
+        <polyline points="2 12 12 17 22 12"></polyline>
+      </svg>
+      <span>Syllabus Revision</span>
+    </div>
+    <div id="navTabAudit" class="nav-item">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"></circle>
+        <polyline points="12 6 12 12 16 14"></polyline>
+      </svg>
+      <span>Audit</span>
+    </div>
+  </nav>
+
+  <!-- ================= MODALS ================= -->
+
+  <!-- MODAL 1: ADD NEW CHAPTER -->
+  <div id="modalAddChapter" class="modal-backdrop">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <span class="sheet-title">Add New Chapter</span>
+        <button class="close-btn modal-close-btn">&times;</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Chapter Title *</label>
+        <input id="inpNewChapterName" type="text" class="form-input" placeholder="e.g. Thermodynamics & Kinetics" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Subject</label>
+        <div id="segNewSubject" class="segmented-control">
+          <div class="segmented-option active" data-value="Physics">Physics</div>
+          <div class="segmented-option" data-value="Chemistry">Chemistry</div>
+          <div class="segmented-option" data-value="Mathematics">Maths</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between;">
+          <label class="form-label">Intrinsic Difficulty (D0)</label>
+          <span id="lblNewD0Val" class="mono" style="font-weight: 700; color: var(--cyan-core);">5.0</span>
+        </div>
+        <input id="sliderNewD0" type="range" class="range-input" min="1.0" max="10.0" step="0.5" value="5.0" />
+        <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim);">
+          <span>1: Pure Logic</span>
+          <span>5: Balanced</span>
+          <span>10: Pure Rote</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Exam Importance / Weightage</label>
+        <div id="segNewWeightage" class="segmented-control">
+          <div class="segmented-option" data-value="0.7">Low (0.7x)</div>
+          <div class="segmented-option active" data-value="1.0">Standard (1.0x)</div>
+          <div class="segmented-option" data-value="1.6">High (1.6x)</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Prerequisites / Parent Chapters (Optional)</label>
+        <div id="newChapterParentsList" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Dynamically populated based on selected subject -->
+        </div>
+      </div>
+
+      <!-- Live Preview Box -->
+      <div class="preview-box">
+        <span class="preview-title">Day-0 Trajectory Preview</span>
+        <div class="preview-row">
+          <span>Baseline Stability (S1):</span>
+          <strong id="prevNewS1" class="preview-val mono">-- Days</strong>
+        </div>
+        <div class="preview-row">
+          <span>First Review Due:</span>
+          <strong id="prevNewDue" class="preview-val mono">--</strong>
+        </div>
+        <div class="preview-row">
+          <span>Starting Session Tier:</span>
+          <strong id="prevNewTier" class="preview-val">Tier 1 (50-min Full Rebuild)</strong>
+        </div>
+      </div>
+
+      <button id="btnSaveNewChapter" class="action-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Save & Schedule Day-0 Review
+      </button>
+    </div>
+  </div>
+
+  <!-- MODAL 2: POST-STUDY SESSION LOGGING -->
+  <div id="modalPostStudy" class="modal-backdrop">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <span id="postStudyModalTitle" class="sheet-title">Post-Study Session Audit</span>
+        <button class="close-btn modal-close-btn">&times;</button>
+      </div>
+
+      <!-- Chapter Dropdown (shown if ad-hoc, hidden if locked) -->
+      <div id="postStudyChapterSelectorWrap" class="form-group" style="display: none;">
+        <label class="form-label">Select Chapter to Audit</label>
+        <select id="postStudyChapterSelect" class="form-select"></select>
+      </div>
+
+      <!-- Integrated 3-Phase Session Stopwatch (Collapsible) -->
+      <div class="stopwatch-widget">
+        <div class="stopwatch-header">
+          <span id="stopwatchPhaseLabel">PHASE 1: BLANK-PAGE RECALL</span>
+          <span id="stopwatchTierHelper" class="mono" style="font-size: 11px; color: var(--cyan-core);">Tier 1 Target</span>
+        </div>
+        <div id="stopwatchDisplay" class="stopwatch-display mono">00:00</div>
+        <div class="stopwatch-actions">
+          <button id="btnStopwatchStart" class="stopwatch-btn">Start</button>
+          <button id="btnStopwatchNextPhase" class="stopwatch-btn">Next Phase</button>
+          <button id="btnStopwatchReset" class="stopwatch-btn">Reset</button>
+        </div>
+      </div>
+
+      <!-- Step 1: Blank-Page Test Recall Rating (B) -->
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between;">
+          <label class="form-label">Step 1: Blank-Page Recall (B)</label>
+          <span id="lblBlankPageDesc" style="font-size: 11px; color: var(--amber-hazard); font-weight: 600;">Recalled with heavy strain</span>
+        </div>
+        <div id="starRatingGroup" class="star-rating-row">
+          <div class="star-btn" data-val="1">1</div>
+          <div class="star-btn" data-val="2">2</div>
+          <div class="star-btn active" data-val="3">3</div>
+          <div class="star-btn" data-val="4">4</div>
+          <div class="star-btn" data-val="5">5</div>
+        </div>
+      </div>
+
+      <!-- Step 1.5: Problem Material Rigor -->
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <label class="form-label" style="margin-bottom: 0;">Step 1.5: Problem Material Rigor</label>
+          <span id="lblRigorSelectionSub" style="font-size: 11px; color: var(--cyan-core); font-weight: 600;">Baseline curve · 1.0x S-mult</span>
+        </div>
+        <div id="rigorSelectorGroup" class="rigor-pill-grid">
+          <button type="button" class="rigor-pill-btn" data-rigor="1">
+            <span class="rigor-pill-title">Tier 1: Foundation / Direct</span>
+            <span class="rigor-pill-desc">Strict grading · 0.85x S-mult</span>
+          </button>
+          <button type="button" class="rigor-pill-btn active" data-rigor="2">
+            <span class="rigor-pill-title">Tier 2: Standard / JEE Main</span>
+            <span class="rigor-pill-desc">Baseline curve · 1.0x S-mult</span>
+          </button>
+          <button type="button" class="rigor-pill-btn" data-rigor="3">
+            <span class="rigor-pill-title">Tier 3: Advanced / Multi-Concept</span>
+            <span class="rigor-pill-desc">Forgiving curve · 1.20x S-mult</span>
+          </button>
+          <button type="button" class="rigor-pill-btn" data-rigor="4">
+            <span class="rigor-pill-title">Tier 4: Elite / Olympiad</span>
+            <span class="rigor-pill-desc">High strain · 1.35x S-mult</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 2: Problem Chunk Performance -->
+      <div class="form-group">
+        <label class="form-label">Step 2: Problem Chunk Performance</label>
+        <div style="display: flex; gap: 10px;">
+          <div style="flex: 1;">
+            <span style="font-size: 11px; color: var(--text-dim);">Attempted</span>
+            <input id="inpTotalProblems" type="number" class="form-input mono" min="1" max="100" value="20" />
+          </div>
+          <div style="flex: 1;">
+            <span style="font-size: 11px; color: var(--text-dim);">Correct</span>
+            <input id="inpCorrectProblems" type="number" class="form-input mono" min="0" max="100" value="16" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Error Deconvolution (M_exec vs M_mem) -->
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <label class="form-label">Step 3: Error Deconvolution</label>
+          <span id="lblTotalWrong" class="mono" style="font-size: 11px; color: #F87171;">4 Wrong Answers</span>
+        </div>
+        <div style="background: var(--bg-card); border: 1px solid var(--border-accent); border-radius: var(--radius-md); padding: 10px 12px; display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <div style="font-weight: 700; font-size: 13px;">Silly / Calculation Slips (M_exec)</div>
+            <div style="font-size: 11px; color: var(--text-dim);">Discounted 75% in memory scoring</div>
+          </div>
+          <div class="number-stepper">
+            <button id="btnDecSilly" class="stepper-btn">-</button>
+            <span id="lblSillyVal" class="stepper-val mono">1</span>
+            <button id="btnIncSilly" class="stepper-btn">+</button>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 11px; padding: 0 4px;">
+          <span style="color: var(--text-dim);">True Concept / Formula Blanks (M_mem):</span>
+          <strong id="lblConceptBlanksVal" class="mono" style="color: #F87171;">3 Blanks</strong>
+        </div>
+      </div>
+
+      <!-- Step 4: Total Session Duration -->
+      <div class="form-group">
+        <label class="form-label">Step 4: Total Session Duration (Minutes)</label>
+        <input id="inpDurationMins" type="number" class="form-input mono" min="5" max="180" value="50" />
+      </div>
+
+      <!-- Step 5: Fault-Line Vault Note -->
+      <div class="form-group">
+        <label class="form-label">Step 5: Fault-Line Vault Note (Micro-Concept Missed)</label>
+        <input id="inpFaultLineNote" type="text" class="form-input" placeholder="e.g. Perpendicular axis theorem 3D constraint" />
+      </div>
+
+      <!-- Step 6 (Conditional): Parent Foundation Blame -->
+      <div id="parentBlameWrap" class="form-group" style="display: none;">
+        <label class="custom-checkbox-row">
+          <input id="chkParentBlame" type="checkbox" />
+          <span id="lblParentBlameText" style="font-size: 12px; color: #FCD34D;">
+            Missed due to forgotten concept in Parent Chapter?
+          </span>
+        </label>
+      </div>
+
+      <!-- Live Session Outcome Preview Box -->
+      <div class="preview-box">
+        <span class="preview-title">Live Computation Outcome</span>
+        <div class="preview-row">
+          <span>Quality Grade:</span>
+          <strong id="prevQGrade" class="preview-val mono">Q = -- (Passed)</strong>
+        </div>
+        <div class="preview-row">
+          <span>Deconvolved Accuracy:</span>
+          <strong id="prevAccuracy" class="preview-val mono">Mastery: --% (Raw: --%) | Rigor Mult: 1.00x</strong>
+        </div>
+        <div class="preview-row">
+          <span>Stability Shift:</span>
+          <strong id="prevStabilityShift" class="preview-val mono">--d &rarr; --d</strong>
+        </div>
+        <div class="preview-row">
+          <span>Next Scheduled Due:</span>
+          <strong id="prevNextDue" class="preview-val mono">--</strong>
+        </div>
+        <div class="preview-row">
+          <span>Session Tier:</span>
+          <strong id="prevTierShift" class="preview-val">--</strong>
+        </div>
+        <div id="prevParentBoostRow" class="preview-row" style="display: none;">
+          <span>Parent Graph Boost:</span>
+          <strong id="prevParentBoostVal" class="preview-val mono" style="color: #34D399;">+0.0d</strong>
+        </div>
+      </div>
+
+      <button id="btnConfirmPostStudy" class="action-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Confirm & Update Cognitive State
+      </button>
+    </div>
+  </div>
+
+  <!-- MODAL 3: MOCK TEST POST-MORTEM MATRIX -->
+  <div id="modalMockTest" class="modal-backdrop">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <span class="sheet-title">Mock Test Post-Mortem Matrix</span>
+        <button class="close-btn modal-close-btn">&times;</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Mock Test Name</label>
+        <input id="inpMockTestName" type="text" class="form-input" placeholder="e.g. JEE Advanced Full Mock 04" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Test Date</label>
+        <input id="inpMockTestDate" type="date" class="form-input mono" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Mock Test Toughness (Material Calibration)</label>
+        <select id="selMockTestToughness" class="form-select mono">
+          <option value="2" selected>Standard (JEE Main) (Defaults to Rigor Tier 2 logic)</option>
+          <option value="3">Tough (JEE Advanced) (Defaults to Rigor Tier 3 logic)</option>
+          <option value="4">Elite (AITS / Olympiad) (Defaults to Rigor Tier 4 logic)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <label class="form-label">Tested Chapters Matrix</label>
+          <button id="btnAddMockRow" class="secondary-btn" style="font-size: 11px; padding: 4px 8px;">
+            + Add Chapter
+          </button>
+        </div>
+        <div id="mockRowsContainer" style="display: flex; flex-direction: column; gap: 10px;">
+          <!-- Dynamically added rows -->
+        </div>
+      </div>
+
+      <!-- Live Syllabus Impact Preview -->
+      <div class="preview-box">
+        <span class="preview-title">Syllabus Impact Preview</span>
+        <div id="mockImpactList" style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="color: var(--text-dim); font-size: 11px;">Add chapters above to calculate back-propagation impact.</div>
+        </div>
+      </div>
+
+      <button id="btnApplyMockTest" class="action-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Apply Back-Propagation Matrix
+      </button>
+    </div>
+  </div>
+
+  <!-- MODAL 4: EXAM & CALIBRATION SETTINGS -->
+  <div id="modalSettings" class="modal-backdrop">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <span class="sheet-title">Exam & Calibration Settings</span>
+        <button class="close-btn modal-close-btn">&times;</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Exam Name</label>
+        <input id="inpSettingsExamName" type="text" class="form-input" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Target Exam Date</label>
+        <input id="inpSettingsExamDate" type="date" class="form-input mono" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Preparation Start Date</label>
+        <input id="inpSettingsStartDate" type="date" class="form-input mono" />
+      </div>
+
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between;">
+          <label class="form-label">Base Target Retention (R_req)</label>
+          <span id="lblSettingsRetentionVal" class="mono" style="color: var(--cyan-core); font-weight: 700;">90%</span>
+        </div>
+        <input id="sliderSettingsRetention" type="range" class="range-input" min="0.75" max="0.95" step="0.01" value="0.90" />
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Daily Time Budget (Minutes)</label>
+        <input id="inpSettingsDailyBudget" type="number" class="form-input mono" min="15" max="600" step="15" value="90" />
+      </div>
+
+      <div class="preview-box">
+        <span class="preview-title">Personal Memory Calibration Scalars (Theta)</span>
+        <div class="preview-row">
+          <span>Theta Logic (D0 &le; 5.0):</span>
+          <strong id="lblThetaLogic" class="preview-val mono">1.000</strong>
+        </div>
+        <div class="preview-row">
+          <span>Theta Rote (D0 &gt; 5.0):</span>
+          <strong id="lblThetaRote" class="preview-val mono">1.000</strong>
+        </div>
+      </div>
+
+      <button id="btnSaveSettings" class="action-btn">
+        Save Calibration Settings
+      </button>
+
+      <div style="border-top: 1px dashed var(--border-subtle); padding-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+        <span class="form-label" style="color: #F87171;">Danger Zone</span>
+        <button id="btnResetDemoData" class="danger-btn">
+          Reset to Factory Demonstration State
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 5: CHAPTER FAULT-LINE VAULT DETAIL -->
+  <div id="modalChapterDetail" class="modal-backdrop">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <span id="detailChapterTitle" class="sheet-title">Chapter Telemetry</span>
+        <button class="close-btn modal-close-btn">&times;</button>
+      </div>
+
+      <div id="chapterTelemetryStats" class="preview-box">
+        <!-- Rendered dynamically -->
+      </div>
+
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <label class="form-label">Fault-Line Vault (Red-Pen Edge Cases)</label>
+          <span id="detailFaultLineCount" class="mono" style="font-size: 11px; color: var(--cyan-core);">0 Notes</span>
+        </div>
+        <div id="detailFaultLineList" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 10px;">
+        <button id="btnLaunchAdHocFromDetail" class="action-btn" style="flex: 1;">
+          Start Review Session
+        </button>
+        <button id="btnDeleteChapter" class="danger-btn" style="flex: 0 0 44px; display: flex; align-items: center; justify-content: center;" title="Delete Chapter">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCRIPTS -->
+  <script src="dsr-engine.js"></script>
+  <script src="dsr-store.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

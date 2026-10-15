@@ -1,6 +1,7 @@
 /**
  * Dynamic DSR v3.0 — Cognitive Revision Engine
  * Main Application Controller & Reactive UI Logic
+ * Includes Set D5 + Set D6 Upgrades, Subtopic Chain Engine, and Fault-Line Graduation
  */
 
 (function () {
@@ -11,12 +12,22 @@
   let currentAuditingChapterId = null;
   let isAdHocMode = false;
   let isSynthesisSession = false;
+  let isSprintModeActive = false;
+  let syllabusSearchQuery = "";
+  let selectedFaultLineSeverity = 2; // 1 (Minor), 2 (Standard), 3 (High)
+  let toastTimeout = null;
 
   // Stopwatch state
   let stopwatchInterval = null;
   let stopwatchSeconds = 0;
   let stopwatchPhase = 1; // 1: Blank-Page, 2: Red-Pen, 3: Problems
   let stopwatchRunning = false;
+
+  // Divided chapter state
+  let dividedSubtopicsList = [];
+
+  // Detail modal state
+  let selectedDetailChapterId = null;
 
   // DOM Elements cache
   const el = {
@@ -39,9 +50,9 @@
     bannerHealthPct: document.getElementById("bannerHealthPct"),
     bannerHealthFill: document.getElementById("bannerHealthFill"),
     budgetDurationText: document.getElementById("budgetDurationText"),
+    inputDailyBudget: document.getElementById("inputDailyBudget"),
     budgetProgressFill: document.getElementById("budgetProgressFill"),
-    btnBudgetDec: document.getElementById("btnBudgetDec"),
-    btnBudgetInc: document.getElementById("btnBudgetInc"),
+    btnSprintToggle: document.getElementById("btnSprintToggle"),
     synthesisBanner: document.getElementById("synthesisBanner"),
     synthesisBannerText: document.getElementById("synthesisBannerText"),
     btnLaunchSynthesis: document.getElementById("btnLaunchSynthesis"),
@@ -50,6 +61,7 @@
     lapsedSlotContainer: document.getElementById("lapsedSlotContainer"),
     lapsedCardContent: document.getElementById("lapsedCardContent"),
     // Syllabus components
+    syllabusSearchInput: document.getElementById("syllabusSearchInput"),
     syllabusCountLabel: document.getElementById("syllabusCountLabel"),
     syllabusListContainer: document.getElementById("syllabusListContainer"),
     // Audit components
@@ -60,15 +72,18 @@
     btnExportCSV: document.getElementById("btnExportCSV"),
     btnTriggerImport: document.getElementById("btnTriggerImport"),
     fileImportInput: document.getElementById("fileImportInput"),
+    btnUndoLastAction: document.getElementById("btnUndoLastAction"),
     // FAB & Speed Dial
     mainFabBtn: document.getElementById("mainFabBtn"),
     fabOverlay: document.getElementById("fabOverlay"),
     speedDialMenu: document.getElementById("speedDialMenu"),
     dialNewChapter: document.getElementById("dialNewChapter"),
+    dialDividedChapter: document.getElementById("dialDividedChapter"),
     dialMockTest: document.getElementById("dialMockTest"),
     dialAdHoc: document.getElementById("dialAdHoc"),
     // Modals
     modalAddChapter: document.getElementById("modalAddChapter"),
+    modalDividedChapter: document.getElementById("modalDividedChapter"),
     modalPostStudy: document.getElementById("modalPostStudy"),
     modalMockTest: document.getElementById("modalMockTest"),
     modalSettings: document.getElementById("modalSettings"),
@@ -76,15 +91,35 @@
     toastPopup: document.getElementById("toastPopup")
   };
 
-  // Toast Helper
-  function showToast(msg) {
-    if (window.AndroidHost && window.AndroidHost.showToast) {
+  // Toast Helper with Undo Action support
+  function showToast(msg, allowUndo = false) {
+    if (window.AndroidHost && window.AndroidHost.showToast && !allowUndo) {
       window.AndroidHost.showToast(msg);
       return;
     }
-    el.toastPopup.textContent = msg;
+    el.toastPopup.innerHTML = "";
+    const textSpan = document.createElement("span");
+    textSpan.textContent = msg;
+    el.toastPopup.appendChild(textSpan);
+
+    if (allowUndo) {
+      const undoBtn = document.createElement("button");
+      undoBtn.textContent = "↩ Undo";
+      undoBtn.style.cssText =
+        "background: none; border: 1px solid var(--amber-hazard); color: #FCD34D; font-size: 11px; font-weight: 700; border-radius: 4px; padding: 2px 7px; margin-left: 8px; cursor: pointer;";
+      undoBtn.onclick = (e) => {
+        e.stopPropagation();
+        const res = DSRStore.undoLastAction();
+        if (res.success) {
+          showToast(`Reverted: ${res.actionLabel}`);
+        }
+      };
+      el.toastPopup.appendChild(undoBtn);
+    }
+
     el.toastPopup.classList.add("show");
-    setTimeout(() => el.toastPopup.classList.remove("show"), 2500);
+    clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(() => el.toastPopup.classList.remove("show"), 3500);
   }
 
   // Native share or fallback download
@@ -107,8 +142,8 @@
 
   // Android Back Button Handler
   window.handleAndroidBack = function () {
-    const openModal = document.querySelector(".modal-backdrop.show");
-    if (openModal) {
+    const openModalEl = document.querySelector(".modal-backdrop.show");
+    if (openModalEl) {
       closeAllModals();
       return true;
     }
@@ -183,56 +218,130 @@
     const effectiveR_req = DSREngine.getEffectiveTargetRetention(settings, now);
     el.bannerTargetRetention.textContent = `${Math.round(effectiveR_req * 100)}%`;
 
-    // 2. Syllabus Health Gauge (% chapters where R(t) >= R_req)
-    let healthyCount = 0;
-    const scoredChapters = chapters.map((ch) => {
-      const triage = DSREngine.calculatePriorityScore(ch, settings, now);
-      if (triage.R >= triage.R_req) {
-        healthyCount++;
+    // 2. Normalized Weighted Syllabus Readiness (Requirement 5.1)
+    const activeChapters = DSRStore.getActiveChapters(chapters);
+    const groupCounts = {};
+    activeChapters.forEach((c) => {
+      if (c.groupId) {
+        groupCounts[c.groupId] = (groupCounts[c.groupId] || 0) + 1;
       }
-      return { chapter: ch, triage, tierInfo: DSREngine.getSessionTier(ch.S) };
     });
 
-    const healthPct = chapters.length > 0 ? Math.round((healthyCount / chapters.length) * 100) : 100;
-    el.bannerHealthPct.textContent = `${healthPct}%`;
+    let totalEffectiveWeight = 0;
+    let weightedHealthSum = 0;
+    let dueTodayCount = 0;
+
+    activeChapters.forEach((ch) => {
+      const effWeight = ch.groupId ? (Number(ch.weightage) || 1.0) / (groupCounts[ch.groupId] || 1) : (Number(ch.weightage) || 1.0);
+      const triage = DSREngine.calculatePriorityScore(ch, settings, now);
+      totalEffectiveWeight += effWeight;
+      if (triage.statusCategory === "HEALTHY" || triage.R >= (triage.R_req - 0.02)) {
+        weightedHealthSum += effWeight;
+      }
+      if (triage.statusCategory !== "HEALTHY") {
+        dueTodayCount++;
+      }
+    });
+
+    const healthPct = totalEffectiveWeight > 0 ? Math.round((weightedHealthSum / totalEffectiveWeight) * 100) : 100;
+    el.bannerHealthPct.textContent = `${healthPct}% (${dueTodayCount} Due)`;
     el.bannerHealthFill.style.width = `${healthPct}%`;
 
-    // 3. Check Synthesis Boss Battle Condition
-    // 2 or 3 mature chapters (S >= 21) due within 4 days (R <= R_req + 0.05)
-    const synthesisCandidates = scoredChapters.filter(
-      (sc) => sc.chapter.S >= 21 && sc.triage.R <= sc.triage.R_req + 0.05
-    );
-
-    if (synthesisCandidates.length >= 2) {
+    // 3. Synthesis Boss Battle Detection Window (Requirement 2.3 & 5.4)
+    const synthesisPair = DSREngine.findSynthesisPair(chapters, settings, now);
+    if (synthesisPair) {
       el.synthesisBanner.style.display = "flex";
-      const names = synthesisCandidates.slice(0, 3).map((c) => c.chapter.name).join(" + ");
-      el.synthesisBannerText.textContent = `Interleave [${names}] into one master problem session for a 1.25x stability boost.`;
+      el.synthesisBannerText.textContent = `Interleave [${synthesisPair.parent.name} + ${synthesisPair.child.name}] into one master problem session for a 1.25x stability boost.`;
       el.btnLaunchSynthesis.onclick = () => {
-        launchSynthesisBattle(synthesisCandidates[0].chapter);
+        launchSynthesisBattle(synthesisPair.child);
       };
     } else {
       el.synthesisBanner.style.display = "none";
     }
 
-    // 4. Priority Queue Sorting & Lapsed Rebuild Separation
+    // 4. Priority Queue Scoring & Subtopic Anti-Collision
+    const scoredChapters = activeChapters.map((ch) => {
+      const triage = DSREngine.calculatePriorityScore(ch, settings, now);
+      return {
+        chapter: ch,
+        triage,
+        tierInfo: DSREngine.getSessionTier(ch.S, triage.R, !!ch.isSubtopic)
+      };
+    });
+
     const lapsedList = scoredChapters.filter((sc) => sc.triage.statusCategory === "LAPSED_REBUILD");
-    const queueList = scoredChapters
+    let queueList = scoredChapters
       .filter((sc) => sc.triage.statusCategory !== "LAPSED_REBUILD")
       .sort((a, b) => b.triage.priority - a.triage.priority);
+
+    // Anti-Collision Filter for Subtopics in same groupId (Requirement 4.C.3):
+    // If an earlier subtopic (#1) and a later subtopic (#2) of the same groupId are both due today:
+    // Only suppress #1 in favor of #2 if #1 has R_bio >= 0.85 AND #1.S < 1.20 * (#1.lastDirectS || #1.S)
+    // AND #1.lastReviewTimestamp < #1.lastDirectReviewTimestamp + (#1.S * 0.30 * 86400000).
+    const groupDueMap = {};
+    queueList.forEach((sc) => {
+      if (sc.chapter.groupId) {
+        if (!groupDueMap[sc.chapter.groupId]) groupDueMap[sc.chapter.groupId] = [];
+        groupDueMap[sc.chapter.groupId].push(sc);
+      }
+    });
+
+    Object.keys(groupDueMap).forEach((grpId) => {
+      const items = groupDueMap[grpId].sort((a, b) => (a.chapter.sequenceIndex || 1) - (b.chapter.sequenceIndex || 1));
+      if (items.length >= 2) {
+        const sub1 = items[0].chapter;
+        const triage1 = items[0].triage;
+        const sCeil1 = 1.20 * (sub1.lastDirectS || sub1.S);
+        const lastDirectTs1 = Number(sub1.lastDirectReviewTimestamp) || Number(sub1.lastReviewTimestamp) || now;
+        const tsCeil1 = lastDirectTs1 + (sub1.S * 0.30 * 86400000);
+        const shouldSuppress1 = (triage1.R >= 0.85) && (sub1.S < sCeil1) && (sub1.lastReviewTimestamp < tsCeil1);
+
+        if (shouldSuppress1) {
+          queueList = queueList.filter((sc) => sc.chapter.id !== sub1.id);
+        }
+      }
+    });
+
+    // 5. Round-Robin Subject Balancer (Requirement 5.3):
+    // When filling dailyTimeBudgetMins, if Slots #1 and #2 belong to the same Subject and another Subject has due chapters,
+    // promote the top due chapter from the underrepresented Subject into Slot #3.
+    if (queueList.length >= 3) {
+      const subj1 = queueList[0].chapter.subject;
+      const subj2 = queueList[1].chapter.subject;
+      if (subj1 && subj1 === subj2) {
+        const altIdx = queueList.findIndex((sc, idx) => idx >= 2 && sc.chapter.subject !== subj1);
+        if (altIdx > 2) {
+          const altItem = queueList.splice(altIdx, 1)[0];
+          queueList.splice(2, 0, altItem);
+        }
+      }
+    }
 
     // Calculate budget consumption
     let scheduledMins = 0;
     const budgetMins = Number(settings.dailyTimeBudgetMins) || 90;
     queueList.forEach((sc) => {
-      if (scheduledMins + sc.tierInfo.durationMins <= budgetMins || scheduledMins === 0) {
-        scheduledMins += sc.tierInfo.durationMins;
+      const dur = isSprintModeActive ? 10 : sc.tierInfo.durationMins;
+      if (scheduledMins + dur <= budgetMins || scheduledMins === 0) {
+        scheduledMins += dur;
       }
     });
 
-    el.budgetDurationText.textContent = `${scheduledMins} / ${budgetMins} min`;
+    if (el.budgetDurationText) {
+      el.budgetDurationText.textContent = `${scheduledMins} /`;
+    }
+    const inpDailyBudget = document.getElementById("inputDailyBudget");
+    if (inpDailyBudget && document.activeElement !== inpDailyBudget) {
+      inpDailyBudget.value = budgetMins;
+    }
     const budgetPct = Math.min(100, Math.round((scheduledMins / budgetMins) * 100));
     el.budgetProgressFill.style.width = `${budgetPct}%`;
     el.budgetProgressFill.style.background = budgetPct > 100 ? "var(--red-urgent)" : "var(--cyan-core)";
+
+    // Update Sprint Toggle UI state
+    if (el.btnSprintToggle) {
+      el.btnSprintToggle.classList.toggle("active", isSprintModeActive);
+    }
 
     // Render Queue Cards
     el.queueCountLabel.textContent = `${queueList.length} topics`;
@@ -242,8 +351,8 @@
       el.queueListContainer.innerHTML = `
         <div style="text-align: center; padding: 30px 16px; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border-subtle);">
           <div style="font-size: 28px; margin-bottom: 8px;">🎯</div>
-          <div style="font-weight: 700; color: var(--emerald-retained);">All Topics Retained!</div>
-          <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">No chapters are currently due. Use the (+) button to add chapters or run an ad-hoc review.</div>
+          <div style="font-weight: 700; color: var(--emerald-retained);">All Active Topics Retained!</div>
+          <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">No active chapters are currently due. Use the (+) button to add or unlock subtopics.</div>
         </div>
       `;
     } else {
@@ -288,7 +397,6 @@
       statusText = `🟡 DUE TODAY (R = ${Math.round(triage.R * 100)}%)`;
     }
 
-    // Subject Class
     const subjClass = (ch.subject || "Physics").toLowerCase();
 
     // High Trap Risk Pill
@@ -296,14 +404,15 @@
       ch.hazardIndex >= 0.15
         ? `<div class="trap-risk-pill">
             <span>⚠️</span>
-            <span><strong>High Trap Risk</strong> (${Math.round(ch.hazardIndex * 100)}% silly error rate) — Double-check calculations & units</span>
+            <span><strong>High Trap Risk</strong> (${Math.round(ch.hazardIndex * 100)}% slip rate) — Double-check calculations & units</span>
           </div>`
         : "";
 
-    // Fault-Lines reminder (Tier 2 or 3)
+    // Fault-Lines reminder: Only display active (!graduated) traps (Requirement 3.B.3)
     let faultLinesHtml = "";
-    if (tier.tier >= 2 && Array.isArray(ch.faultLineVault) && ch.faultLineVault.length > 0) {
-      const topNotes = ch.faultLineVault.slice(0, 2).map((fl) => fl.note).join(" • ");
+    const activeTraps = Array.isArray(ch.faultLineVault) ? ch.faultLineVault.filter((t) => !t.graduated) : [];
+    if (activeTraps.length > 0) {
+      const topNotes = activeTraps.slice(0, 2).map((fl) => fl.note).join(" • ");
       faultLinesHtml = `
         <div class="fault-lines-pill">
           <strong>🎯 Fault-Lines to verify:</strong> ${escapeHtml(topNotes)}
@@ -311,10 +420,24 @@
       `;
     }
 
+    // Subtopic Breadcrumb (Requirement 4.C.3)
+    let breadcrumbHtml = "";
+    if (ch.isSubtopic && ch.groupTitle) {
+      breadcrumbHtml = `<span class="subtopic-breadcrumb">🧩 ${escapeHtml(ch.groupTitle)} · PART #${ch.sequenceIndex || 1}</span>`;
+    }
+
+    // Task summary line (Sprint mode aware)
+    const taskText = isSprintModeActive
+      ? "⚡ Sprint Mode · 10m Blank-Page Refresher (0 Problems)"
+      : `Task: ${escapeHtml(tier.taskSummary)}`;
+
     div.innerHTML = `
       <div class="card-top-row">
-        <span class="status-badge ${statusClass} mono">${statusText}</span>
-        <span class="tier-badge mono">${tier.name} · ${tier.durationMins}m</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span class="status-badge ${statusClass} mono">${statusText}</span>
+          ${breadcrumbHtml}
+        </div>
+        <span class="tier-badge mono">${isSprintModeActive ? "10m Sprint" : `${tier.name} · ${tier.durationMins}m`}</span>
       </div>
       <div class="chapter-main-row">
         <span class="chapter-title">${escapeHtml(ch.name)}</span>
@@ -323,7 +446,7 @@
       ${trapWarningHtml}
       ${faultLinesHtml}
       <div class="prescribed-task-line">
-        <span>Task: ${escapeHtml(tier.taskSummary)}</span>
+        <span>${taskText}</span>
         <span class="mono" style="color: var(--cyan-core); font-weight: 700;">Tap to Audit &rarr;</span>
       </div>
     `;
@@ -336,96 +459,458 @@
   }
 
   // -------------------------------------------------------------
-  // SYLLABUS & FAULT-LINE BROWSER
+  // SYLLABUS & NOTEPAD BARCODE REGISTRY BROWSER
   // -------------------------------------------------------------
+  function chapterMatchesQuery(ch, query) {
+    if (!query) return true;
+    if (ch.name && ch.name.toLowerCase().includes(query)) return true;
+    if (ch.subject && ch.subject.toLowerCase().includes(query)) return true;
+    if (ch.groupTitle && ch.groupTitle.toLowerCase().includes(query)) return true;
+    if (Array.isArray(ch.notepadIds)) {
+      return ch.notepadIds.some((n) =>
+        (n.code && n.code.toLowerCase().includes(query)) ||
+        (n.location && n.location.toLowerCase().includes(query)) ||
+        (n.summary && n.summary.toLowerCase().includes(query))
+      );
+    }
+    return false;
+  }
+
+  function renderNotepadDrawerContent(ch, query = "") {
+    const list = Array.isArray(ch.notepadIds) ? ch.notepadIds : [];
+    let itemsHtml = "";
+    if (list.length === 0) {
+      itemsHtml = `<div style="font-size: 11px; color: var(--text-dim); font-style: italic; padding: 4px 0;">No physical notepad Barcodes / IDs registered yet.</div>`;
+    } else {
+      itemsHtml = list
+        .map((item) => {
+          const isMatch = query && (
+            (item.code && item.code.toLowerCase().includes(query)) ||
+            (item.location && item.location.toLowerCase().includes(query)) ||
+            (item.summary && item.summary.toLowerCase().includes(query))
+          );
+          return `
+            <div class="notepad-item-card ${isMatch ? 'search-match' : ''}">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;">
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 2px;">
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <span class="mono" style="font-weight: 700; color: var(--cyan-core); font-size: 11.5px;">#${escapeHtml(item.code)}</span>
+                    <span style="font-size: 11px; color: var(--text-muted); font-weight: 600;">📍 ${escapeHtml(item.location)}</span>
+                  </div>
+                  <div style="font-size: 11.5px; color: var(--text-main);">${escapeHtml(item.summary || "No notes logged.")}</div>
+                  <span style="font-size: 10px; color: var(--text-dim);">Added: ${escapeHtml(item.createdAt || "")}</span>
+                </div>
+                <button type="button" class="secondary-btn btn-delete-notepad-id" data-chap-id="${ch.id}" data-item-id="${item.id}" style="padding: 2px 6px; font-size: 10.5px; color: #F87171; border-color: rgba(239, 68, 68, 0.35);" title="Delete ID">
+                  🗑️
+                </button>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    return `
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <span style="font-size: 11px; font-weight: 700; color: var(--cyan-core);">🏷️ Physical Notepad Barcode / Reference IDs (${list.length})</span>
+        <button type="button" class="secondary-btn btn-add-inline-notepad" data-chap-id="${ch.id}" style="font-size: 10.5px; padding: 2px 7px; color: var(--cyan-core); border-color: rgba(56, 189, 248, 0.4);">
+          + Add New ID
+        </button>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        ${itemsHtml}
+      </div>
+    `;
+  }
+
+  function wireNotepadDrawerEvents(container) {
+    container.querySelectorAll(".btn-toggle-notepad").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const cid = btn.getAttribute("data-id");
+        const drawer = document.getElementById(`notepadDrawer_${cid}`);
+        if (!drawer) return;
+        const isHidden = drawer.style.display === "none";
+        drawer.style.display = isHidden ? "flex" : "none";
+      });
+    });
+
+    container.querySelectorAll(".btn-delete-notepad-id").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const chapId = btn.getAttribute("data-chap-id");
+        const itemId = btn.getAttribute("data-item-id");
+        if (confirm("Delete this physical notepad barcode reference?")) {
+          DSRStore.deleteNotepadIdFromChapter(chapId, itemId);
+          showToast("Deleted physical notepad reference.");
+          renderSyllabus();
+        }
+      });
+    });
+
+    container.querySelectorAll(".btn-add-inline-notepad").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const chapId = btn.getAttribute("data-chap-id");
+        const code = prompt("Enter Barcode / Reference ID (e.g. ROT-03, NB1-P14):");
+        if (!code || !code.trim()) return;
+        const loc = prompt("Enter physical notepad location (e.g. Notepad 1 · Page 18):", "Notepad 1");
+        const summary = prompt("Enter short convention note / highlight:", "");
+        const added = DSRStore.addNotepadIdToChapter(chapId, { code: code.trim(), location: (loc || "").trim(), summary: (summary || "").trim() });
+        if (added) {
+          showToast(`Added Barcode #${added.code}!`, true);
+          renderSyllabus();
+        }
+      });
+    });
+  }
+
   function renderSyllabus() {
     const state = DSRStore.getState();
     const settings = state.settings;
     const chapters = state.chapters;
     const now = Date.now();
+    const query = syllabusSearchQuery.trim().toLowerCase();
 
     const filtered = chapters.filter((c) => {
-      if (activeSubjectFilter === "ALL") return true;
-      return c.subject === activeSubjectFilter;
+      if (activeSubjectFilter !== "ALL" && c.subject !== activeSubjectFilter) return false;
+      if (!query) return true;
+      if (c.groupId) {
+        // Group matches if title matches or any sibling subtopic matches
+        const groupMembers = chapters.filter((m) => m.groupId === c.groupId);
+        return groupMembers.some((m) => chapterMatchesQuery(m, query));
+      }
+      return chapterMatchesQuery(c, query);
     });
 
-    el.syllabusCountLabel.textContent = `${filtered.length} Chapters`;
+    el.syllabusCountLabel.textContent = `${filtered.length} Topics`;
     el.syllabusListContainer.innerHTML = "";
 
     if (filtered.length === 0) {
       el.syllabusListContainer.innerHTML = `
         <div style="text-align: center; padding: 30px 16px; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border-subtle); color: var(--text-dim);">
-          No chapters found for this subject filter.
+          No chapters or notepad references found matching query.
         </div>
       `;
       return;
     }
 
+    const handledGroupIds = new Set();
+
     filtered.forEach((ch) => {
-      const { R, elapsedDays } = DSREngine.getRetrievability(ch, settings, now);
-      const tier = DSREngine.getSessionTier(ch.S);
-      const vaultCount = Array.isArray(ch.faultLineVault) ? ch.faultLineVault.length : 0;
-      const subjClass = (ch.subject || "Physics").toLowerCase();
+      if (ch.groupId) {
+        if (handledGroupIds.has(ch.groupId)) return;
+        handledGroupIds.add(ch.groupId);
 
-      const div = document.createElement("div");
-      div.className = "chapter-card";
-      div.innerHTML = `
-        <div class="card-top-row">
-          <span class="subject-pill ${subjClass}">${escapeHtml(ch.subject)}</span>
-          <span class="mono" style="font-size: 11px; color: ${R >= 0.85 ? 'var(--emerald-retained)' : 'var(--amber-hazard)'};">
-            R(t): <strong>${Math.round(R * 100)}%</strong> (${elapsedDays}d ago)
-          </span>
-        </div>
-        <div class="chapter-main-row">
-          <span class="chapter-title">${escapeHtml(ch.name)}</span>
-          <span class="tier-badge mono">${tier.name}</span>
-        </div>
-        <div style="display: flex; gap: 12px; font-size: 11.5px; color: var(--text-muted); background: rgba(0,0,0,0.25); padding: 8px 10px; border-radius: var(--radius-sm);">
-          <div>Stability: <strong class="mono" style="color: var(--text-main);">${ch.S}d</strong></div>
-          <div>Difficulty (D): <strong class="mono" style="color: var(--text-main);">${ch.D}</strong></div>
-          <div>Lapses: <strong class="mono" style="color: ${ch.lapses > 0 ? '#F87171' : 'var(--text-main)'};">${ch.lapses || 0}</strong></div>
-          <div>Vault Notes: <strong class="mono" style="color: var(--cyan-core);">${vaultCount}</strong></div>
-        </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; border-top: 1px dashed var(--border-subtle); padding-top: 6px;">
-          <span style="color: var(--text-dim);">${ch.parents && ch.parents.length > 0 ? `${ch.parents.length} Prerequisite Parent(s)` : 'Foundational Root Topic'}</span>
-          <span style="color: var(--cyan-core); font-weight: 700;">View Telemetry &rarr;</span>
-        </div>
-      `;
+        // Render Macro Chapter Card
+        const groupSubtopics = chapters
+          .filter((c) => c.groupId === ch.groupId)
+          .sort((a, b) => (a.sequenceIndex || 1) - (b.sequenceIndex || 1));
 
-      div.addEventListener("click", () => {
-        openChapterDetailModal(ch.id);
-      });
+        const activeSubtopics = groupSubtopics.filter((s) => !s.isLocked && !s.isDropped);
+        const avgR = activeSubtopics.length > 0
+          ? Math.round(
+              (activeSubtopics.reduce((sum, s) => sum + DSREngine.getRetrievability(s, settings, now).R, 0) /
+                activeSubtopics.length) *
+                100
+            )
+          : 100;
 
-      el.syllabusListContainer.appendChild(div);
+        const card = document.createElement("div");
+        card.className = "macro-chapter-card";
+
+        const subjClass = (ch.subject || "Physics").toLowerCase();
+        const macroTitle = ch.groupTitle || "Macro Chapter";
+
+        let treeHtml = "";
+        groupSubtopics.forEach((sub, sIdx) => {
+          const isLast = sIdx === groupSubtopics.length - 1;
+          const branchSymbol = isLast ? "└─" : "├─";
+          const retObj = DSREngine.getRetrievability(sub, settings, now);
+          const rPct = Math.round(retObj.R * 100);
+          const subNotepadCount = Array.isArray(sub.notepadIds) ? sub.notepadIds.length : 0;
+          const autoOpenSub = query && Array.isArray(sub.notepadIds) && sub.notepadIds.some(n =>
+            (n.code && n.code.toLowerCase().includes(query)) ||
+            (n.location && n.location.toLowerCase().includes(query)) ||
+            (n.summary && n.summary.toLowerCase().includes(query))
+          );
+
+          if (sub.isLocked) {
+            treeHtml += `
+              <div class="subtopic-tree-node locked">
+                <span class="mono" style="color: #A855F7;">${branchSymbol} Part ${sub.sequenceIndex || (sIdx + 1)}:</span>
+                <span style="flex: 1; font-weight: 600; color: var(--text-dim);">${escapeHtml(sub.name)}</span>
+                <button class="secondary-btn btn-activate-sub" data-id="${sub.id}" style="font-size: 10.5px; padding: 3px 8px; color: #34D399; border-color: rgba(16,185,129,0.4);">
+                  🔓 Activate
+                </button>
+              </div>
+            `;
+          } else {
+            const activeTrapsCount = Array.isArray(sub.faultLineVault) ? sub.faultLineVault.filter((t) => !t.graduated).length : 0;
+            const masteredCount = Array.isArray(sub.faultLineVault) ? sub.faultLineVault.filter((t) => t.graduated).length : 0;
+
+            treeHtml += `
+              <div class="subtopic-tree-node">
+                <span class="mono" style="color: #A855F7;">${branchSymbol} Part ${sub.sequenceIndex || (sIdx + 1)}:</span>
+                <span style="flex: 1; font-weight: 600; color: var(--text-main); cursor: pointer;" class="btn-subtopic-detail" data-id="${sub.id}">${escapeHtml(sub.name)}</span>
+                <span class="mono" style="font-size: 11px; color: ${rPct >= 85 ? 'var(--emerald-retained)' : 'var(--amber-hazard)'};">S:${sub.S}d (R:${rPct}%)</span>
+                <button type="button" class="notepad-badge-btn btn-toggle-notepad" data-id="${sub.id}" style="font-size: 10px; padding: 2px 6px;">🏷️ IDs (${subNotepadCount})</button>
+                ${activeTrapsCount > 0 ? `<span style="font-size: 10px; color: #FCD34D;" title="Active Traps">🎯 ${activeTrapsCount}</span>` : ''}
+                ${masteredCount > 0 ? `<span style="font-size: 10px; color: #34D399;" title="Mastered Traps">🏆 ${masteredCount}</span>` : ''}
+                <button class="action-btn-sm btn-audit-sub" data-id="${sub.id}" style="font-size: 10.5px; padding: 3px 7px;">Audit</button>
+              </div>
+              <div class="notepad-drawer" id="notepadDrawer_${sub.id}" style="display: ${autoOpenSub ? 'flex' : 'none'}; flex-direction: column; gap: 6px; background: rgba(56,189,248,0.04); border: 1px dashed rgba(56,189,248,0.3); border-radius: 6px; padding: 8px; margin: 2px 0 6px 14px;">
+                ${renderNotepadDrawerContent(sub, query)}
+              </div>
+            `;
+          }
+        });
+
+        card.innerHTML = `
+          <div class="macro-header-row">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="subject-pill ${subjClass}">${escapeHtml(ch.subject)}</span>
+              <span class="macro-title">🧩 ${escapeHtml(macroTitle)}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="mono" style="font-size: 11px; color: #C084FC;">${activeSubtopics.length}/${groupSubtopics.length} Active · R:${avgR}%</span>
+            </div>
+          </div>
+          <div class="subtopic-tree-list">
+            ${treeHtml}
+          </div>
+          <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;">
+            <button class="secondary-btn btn-append-sub" data-group-id="${ch.groupId}" style="font-size: 11px; padding: 4px 8px; color: #A855F7;">
+              + Append Subtopic
+            </button>
+          </div>
+        `;
+
+        // Wire subtopic tree buttons
+        card.querySelectorAll(".btn-activate-sub").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const sid = btn.getAttribute("data-id");
+            const activated = DSRStore.activateSubtopic(sid);
+            if (activated) {
+              showToast(`Activated ${activated.name}! Scheduled for spaced reviews.`, true);
+              renderSyllabus();
+            }
+          });
+        });
+
+        card.querySelectorAll(".btn-audit-sub").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const sid = btn.getAttribute("data-id");
+            openPostStudyModal(sid, false);
+          });
+        });
+
+        card.querySelectorAll(".btn-subtopic-detail").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const sid = btn.getAttribute("data-id");
+            openChapterDetailModal(sid);
+          });
+        });
+
+        card.querySelector(".btn-append-sub").addEventListener("click", () => {
+          const title = prompt("Enter title for new subtopic in sequence:");
+          if (title && title.trim()) {
+            const d0Str = prompt("Enter difficulty D0 (1.0 - 10.0):", "6.0");
+            const d0 = Number(d0Str) || 6.0;
+            const newSub = DSRStore.appendSubtopicToGroup(ch.groupId, { name: title.trim(), d0, isLocked: false });
+            if (newSub) {
+              showToast(`Appended ${newSub.name}!`, true);
+              renderSyllabus();
+            }
+          }
+        });
+
+        wireNotepadDrawerEvents(card);
+        el.syllabusListContainer.appendChild(card);
+      } else {
+        // Standalone Chapter Card
+        const { R, elapsedDays } = DSREngine.getRetrievability(ch, settings, now);
+        const tier = DSREngine.getSessionTier(ch.S, R, false);
+        const activeTraps = Array.isArray(ch.faultLineVault) ? ch.faultLineVault.filter((t) => !t.graduated) : [];
+        const masteredTraps = Array.isArray(ch.faultLineVault) ? ch.faultLineVault.filter((t) => t.graduated) : [];
+        const notepadCount = Array.isArray(ch.notepadIds) ? ch.notepadIds.length : 0;
+        const autoOpenCh = query && Array.isArray(ch.notepadIds) && ch.notepadIds.some(n =>
+          (n.code && n.code.toLowerCase().includes(query)) ||
+          (n.location && n.location.toLowerCase().includes(query)) ||
+          (n.summary && n.summary.toLowerCase().includes(query))
+        );
+        const subjClass = (ch.subject || "Physics").toLowerCase();
+
+        const div = document.createElement("div");
+        div.className = "chapter-card";
+
+        const leechAlertHtml =
+          ch.lapses >= 3
+            ? `<button class="leech-alert-pill btn-split-leech" data-id="${ch.id}" title="Split recurrent trap into subtopic chain">
+                🧬 Leech Alert · Split Subtopic
+              </button>`
+            : "";
+
+        const activeTrapsHtml =
+          activeTraps.length > 0
+            ? `<span class="badge-amber" style="font-size: 11px; padding: 2px 6px; border-radius: 4px; background: rgba(245,158,11,0.15); color: #FCD34D;">
+                🎯 Active Fault-Lines (${activeTraps.length})
+              </span>`
+            : "";
+
+        const masteredTrapsHtml =
+          masteredTraps.length > 0
+            ? `<button type="button" class="mastered-traps-pill btn-toggle-mastered" data-id="${ch.id}">
+                🏆 Mastered Traps (${masteredTraps.length}) ▾
+              </button>`
+            : "";
+
+        div.innerHTML = `
+          <div class="card-top-row">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <span class="subject-pill ${subjClass}">${escapeHtml(ch.subject)}</span>
+              ${leechAlertHtml}
+            </div>
+            <span class="mono" style="font-size: 11px; color: ${R >= 0.85 ? 'var(--emerald-retained)' : 'var(--amber-hazard)'};">
+              R(t): <strong>${Math.round(R * 100)}%</strong> (${elapsedDays}d ago)
+            </span>
+          </div>
+          <div class="chapter-main-row">
+            <span class="chapter-title" style="cursor: pointer;">${escapeHtml(ch.name)}</span>
+            <span class="tier-badge mono">${tier.name} · ${tier.durationMins}m</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+            <span class="mono" style="font-size: 11px; color: var(--text-dim);">S: ${ch.S}d | D: ${ch.D} | Lapses: ${ch.lapses || 0}</span>
+            <button type="button" class="notepad-badge-btn btn-toggle-notepad" data-id="${ch.id}">🏷️ Notepad IDs (${notepadCount}) ▾</button>
+            ${activeTrapsHtml}
+            ${masteredTrapsHtml}
+          </div>
+          <div class="notepad-drawer" id="notepadDrawer_${ch.id}" style="display: ${autoOpenCh ? 'flex' : 'none'}; flex-direction: column; gap: 6px; background: rgba(56,189,248,0.04); border: 1px dashed rgba(56,189,248,0.3); border-radius: 6px; padding: 8px; margin-top: 6px;">
+            ${renderNotepadDrawerContent(ch, query)}
+          </div>
+          <div class="mastered-traps-drawer" id="masteredDrawer_${ch.id}" style="display: none; background: rgba(16,185,129,0.06); border: 1px dashed rgba(16,185,129,0.3); border-radius: 6px; padding: 8px; margin-top: 4px;">
+            <!-- Populated when opened -->
+          </div>
+          <div class="prescribed-task-line" style="margin-top: 4px;">
+            <span>Task: ${escapeHtml(tier.taskSummary)}</span>
+            <button class="secondary-btn btn-open-detail" style="font-size: 11px; padding: 3px 8px;">Inspect &rarr;</button>
+          </div>
+        `;
+
+        div.querySelector(".chapter-title").addEventListener("click", () => openChapterDetailModal(ch.id));
+        div.querySelector(".btn-open-detail").addEventListener("click", () => openChapterDetailModal(ch.id));
+
+        const splitBtn = div.querySelector(".btn-split-leech");
+        if (splitBtn) {
+          splitBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const subtopicName = prompt(`Split Leech Chapter "${ch.name}" into subtopic chain.\nEnter title for isolated subtopic problem area:`);
+            if (subtopicName && subtopicName.trim()) {
+              const newD0Str = prompt("Enter D0 for this troublesome subtopic (1.0 - 10.0):", String(ch.D0));
+              const newD0 = Number(newD0Str) || ch.D0;
+              const newSub = DSRStore.splitLeechChapter(ch.id, subtopicName.trim(), newD0);
+              if (newSub) {
+                showToast(`Split "${ch.name}" into subtopics! Lapses reset to 1.`, true);
+                renderSyllabus();
+              }
+            }
+          });
+        }
+
+        const masteredBtn = div.querySelector(".btn-toggle-mastered");
+        if (masteredBtn) {
+          masteredBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const drawer = document.getElementById(`masteredDrawer_${ch.id}`);
+            if (!drawer) return;
+            const isHidden = drawer.style.display === "none";
+            drawer.style.display = isHidden ? "flex" : "none";
+            if (isHidden) {
+              drawer.style.flexDirection = "column";
+              drawer.style.gap = "6px";
+              drawer.innerHTML =
+                `<div style="font-size: 11px; font-weight: 700; color: #34D399; margin-bottom: 2px;">
+                  🏆 Mastered Traps Archive (${masteredTraps.length})
+                </div>` +
+                masteredTraps
+                  .map(
+                    (t) => `
+                <div style="display: flex; justify-content: space-between; align-items: center; background: var(--bg-card); padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+                  <span style="color: var(--text-main);">${escapeHtml(t.note)}</span>
+                  <button type="button" class="secondary-btn btn-restore-trap" data-chap-id="${ch.id}" data-fl-id="${t.id}" style="font-size: 10px; padding: 2px 6px; color: #FCD34D;">
+                    Restore to Active
+                  </button>
+                </div>
+              `
+                  )
+                  .join("");
+
+              drawer.querySelectorAll(".btn-restore-trap").forEach((rb) => {
+                rb.addEventListener("click", (ev) => {
+                  ev.stopPropagation();
+                  const flId = rb.getAttribute("data-fl-id");
+                  const chap = state.chapters.find((c) => c.id === ch.id);
+                  if (chap) {
+                    const targetTrap = chap.faultLineVault.find((t) => t.id === flId);
+                    if (targetTrap) {
+                      targetTrap.graduated = false;
+                      targetTrap.cleanStreak = 0;
+                      targetTrap.lastUpdated = new Date().toISOString().split("T")[0];
+                      DSRStore.saveState();
+                      showToast(`Restored trap "${targetTrap.note}" to active audit!`);
+                      renderSyllabus();
+                    }
+                  }
+                });
+              });
+            }
+          });
+        }
+
+        wireNotepadDrawerEvents(div);
+        el.syllabusListContainer.appendChild(div);
+      }
     });
   }
 
   // -------------------------------------------------------------
-  // IMMUTABLE AUDIT LEDGER (Human-Readable Activity Cards)
-  // -------------------------------------------------------------
+  // AUDIT LEDGER CONTROLLER
   function renderAuditLedger() {
     const state = DSRStore.getState();
     const logs = state.auditLogs || [];
 
     const filtered = logs.filter((log) => {
-      if (activeAuditFilter !== "ALL" && log.inputType !== activeAuditFilter) {
-        return false;
+      if (activeAuditFilter !== "ALL") {
+        if (activeAuditFilter === "POST_STUDY_REVIEW") {
+          const isReview = ["POST_STUDY_REVIEW", "AD_HOC_REVIEW", "SYNTHESIS_BATTLE", "CRYO_FREEZE_SPRINT"].includes(log.inputType);
+          if (!isReview) return false;
+        } else if (activeAuditFilter === "NEW_CHAPTER") {
+          const isChap = ["NEW_CHAPTER", "DIVIDED_CHAPTER_CREATED", "SUBTOPIC_APPENDED", "SUBTOPIC_ACTIVATED"].includes(log.inputType);
+          if (!isChap) return false;
+        } else if (activeAuditFilter === "MOCK_TEST_LOG") {
+          if (log.inputType !== "MOCK_TEST_LOG") return false;
+        } else if (activeAuditFilter === "EXAM_SETTINGS_UPDATE") {
+          const isSettings = ["EXAM_SETTINGS_UPDATE", "CLOCK_SHIFT", "CLOCK_SHIFT_RESET"].includes(log.inputType);
+          if (!isSettings) return false;
+        } else if (log.inputType !== activeAuditFilter) {
+          return false;
+        }
       }
-      if (auditSearchQuery.trim()) {
-        const q = auditSearchQuery.toLowerCase();
-        const jsonStr = (JSON.stringify(log.rawInputs) + JSON.stringify(log.computedOutputs) + log.inputType + log.entryMethod).toLowerCase();
-        return jsonStr.includes(q);
+      if (auditSearchQuery) {
+        const query = auditSearchQuery.toLowerCase();
+        const jsonStr = JSON.stringify(log).toLowerCase();
+        return jsonStr.includes(query);
       }
       return true;
     });
 
-    el.auditCountLabel.textContent = `${filtered.length} Events`;
+    el.auditCountLabel.textContent = `${filtered.length} Records`;
     el.auditLogListContainer.innerHTML = "";
 
     if (filtered.length === 0) {
       el.auditLogListContainer.innerHTML = `
         <div style="text-align: center; padding: 30px 16px; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border-subtle); color: var(--text-dim);">
-          No audit records found matching criteria.
+          No audit records found matching the active filter.
         </div>
       `;
       return;
@@ -438,186 +923,243 @@
   }
 
   function createHumanReadableAuditCard(log) {
-    const card = document.createElement("div");
-    card.className = "log-card";
+    const div = document.createElement("div");
+    div.className = "log-card";
 
-    let badgeColor = "var(--cyan-core)";
-    let badgeBg = "rgba(56, 189, 248, 0.15)";
-    let actionIcon = "📝";
-    let title = "System Event";
-    let narrative = "";
-    let chips = [];
-
-    const raw = log.rawInputs || {};
     const comp = log.computedOutputs || {};
-    const displayRaw = { ...raw };
+    const raw = log.rawInputs || {};
 
-    if (log.inputType === "POST_STUDY_REVIEW" || log.inputType === "AD_HOC_REVIEW" || log.inputType === "SYNTHESIS_BATTLE") {
-      const isSyn = log.inputType === "SYNTHESIS_BATTLE";
-      badgeColor = isSyn ? "#C084FC" : "#10B981";
-      badgeBg = isSyn ? "rgba(139, 92, 246, 0.2)" : "rgba(16, 185, 129, 0.15)";
-      actionIcon = isSyn ? "🟣" : "📖";
-      const chapter = raw.chapterName || "Chapter Review";
-      title = `${actionIcon} ${isSyn ? 'Synthesis Battle' : 'Study Review'}: ${chapter}`;
+    // 1. Badge styling & text
+    let badgeText = log.inputType;
+    let badgeColorStyle = "background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.35);";
 
-      const passed = comp.passed !== false;
-      const qVal = comp.Q !== undefined ? comp.Q : "--";
-      const totalP = raw.totalProblems || 10;
-      const corrP = raw.correctProblems || 0;
-      const acc = Math.round((corrP / totalP) * 100);
-      const sOld = comp.S_old !== undefined ? comp.S_old : "--";
-      const sNew = comp.S_new !== undefined ? comp.S_new : "--";
-
-      // Fallback: Default to Rigor Tier 2 (Standard / JEE Main) if missing
-      const rigorTier = Number(raw.rigorTier || comp.rigorTier) || 2;
-      const rigorConfig = DSREngine.RIGOR_CONFIG ? DSREngine.RIGOR_CONFIG[rigorTier] : null;
-      const rigorLabel = raw.rigorLabel || (rigorConfig ? rigorConfig.label : "Standard / JEE Main");
-      const rigorMult = Number(raw.rigorMult || comp.rigorMult || (rigorConfig ? rigorConfig.stabilityBonus : 1.00));
-      const pAdj = comp.P_adj !== undefined ? comp.P_adj : acc;
-      const pTrue = comp.P_true !== undefined ? comp.P_true : acc;
-
-      displayRaw.rigorTier = rigorTier;
-      displayRaw.rigorLabel = rigorLabel;
-      displayRaw.rigorMult = Number(rigorMult.toFixed(2));
-
-      narrative = `Completed revision of <strong>${escapeHtml(chapter)}</strong>. Solved <strong>${corrP}/${totalP}</strong> problems correctly (${acc}% raw accuracy). Mastery: <strong>${pAdj}%</strong> (Raw: <strong>${pTrue}%</strong>) · Rigor: <strong>${escapeHtml(rigorLabel)}</strong> (${rigorMult.toFixed(2)}x S-mult). Result: <strong style="color: ${passed ? '#34D399' : '#F87171'};">${passed ? 'Passed (Retained)' : 'Lapsed (Needs Rebuild)'}</strong> with quality grade <strong>Q = ${qVal}</strong>.`;
-
-      chips.push(`🎯 Rigor: ${escapeHtml(rigorLabel)} (${rigorMult.toFixed(2)}x)`);
-      chips.push(`Grade: Q = ${qVal}`);
-      chips.push(`Mastery: ${pAdj}%`);
-      chips.push(`Stability: ${sOld}d → ${sNew}d`);
-      if (comp.D_old && comp.D_new) chips.push(`Difficulty: ${comp.D_old} → ${comp.D_new}`);
-      if (raw.sillySlips) chips.push(`Silly Slips: ${raw.sillySlips}`);
-      if (raw.conceptBlanks) chips.push(`Concept Blanks: ${raw.conceptBlanks}`);
-      if (raw.durationMins) chips.push(`Time: ${raw.durationMins}m`);
-      if (comp.nextDueDays) chips.push(`Next Due: ${comp.nextDueDays}d`);
-      if (raw.faultLineNote && raw.faultLineNote !== "(None)") chips.push(`Fault-Line: "${escapeHtml(raw.faultLineNote)}"`);
-      if (Array.isArray(comp.parentBoosts) && comp.parentBoosts.length > 0) {
-        comp.parentBoosts.forEach((pb) => {
-          if (pb.boostDays) chips.push(`+${pb.boostDays}d to ${escapeHtml(pb.parentName)}`);
-        });
+    if (log.inputType === "POST_STUDY_REVIEW" || log.inputType === "AD_HOC_REVIEW") {
+      if (comp.passed) {
+        badgeText = log.inputType === "AD_HOC_REVIEW" ? "AD-HOC REVIEW · PASSED" : "REVIEW · PASSED";
+        badgeColorStyle = "background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.35);";
+      } else {
+        badgeText = log.inputType === "AD_HOC_REVIEW" ? "AD-HOC REVIEW · LAPSED" : "REVIEW · LAPSED";
+        badgeColorStyle = "background: rgba(239, 68, 68, 0.15); color: #F87171; border: 1px solid rgba(239, 68, 68, 0.35);";
       }
+    } else if (log.inputType === "CRYO_FREEZE_SPRINT") {
+      badgeText = "CRYO-FREEZE SPRINT";
+      badgeColorStyle = "background: rgba(56, 189, 248, 0.18); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.4);";
+    } else if (log.inputType === "SYNTHESIS_BATTLE") {
+      badgeText = comp.passed ? "SYNTHESIS BATTLE · PASSED" : "SYNTHESIS BATTLE · LAPSED";
+      badgeColorStyle = "background: rgba(139, 92, 246, 0.2); color: #C084FC; border: 1px solid rgba(139, 92, 246, 0.4);";
     } else if (log.inputType === "NEW_CHAPTER") {
-      badgeColor = "var(--cyan-core)";
-      badgeBg = "rgba(56, 189, 248, 0.15)";
-      actionIcon = "➕";
-      const chapter = raw.name || "New Topic";
-      title = `➕ Added Chapter: ${chapter}`;
-      narrative = `Added new chapter <strong>${escapeHtml(chapter)}</strong> (${escapeHtml(raw.subject || 'STEM')}) at intrinsic difficulty <strong>D₀ = ${raw.D0 || 5.0}</strong>. Initialized Day-0 baseline stability in <strong>${escapeHtml(comp.startingTier || 'Tier 1')}</strong>.`;
-
-      if (comp.initialS) chips.push(`Initial S: ${comp.initialS}d`);
-      if (raw.weightage) chips.push(`Weightage: ${raw.weightage}x`);
-      if (comp.firstReviewDue) chips.push(`First Due: ${escapeHtml(comp.firstReviewDue)}`);
-      if (raw.parentsCount) chips.push(`Prerequisites: ${raw.parentsCount}`);
+      badgeText = "NEW CHAPTER";
+      badgeColorStyle = "background: rgba(16, 185, 129, 0.15); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.35);";
+    } else if (log.inputType === "DIVIDED_CHAPTER_CREATED") {
+      badgeText = "DIVIDED CHAPTER";
+      badgeColorStyle = "background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.35);";
+    } else if (log.inputType === "SUBTOPIC_APPENDED" || log.inputType === "SUBTOPIC_ACTIVATED") {
+      badgeText = log.inputType === "SUBTOPIC_ACTIVATED" ? "SUBTOPIC UNLOCKED" : "SUBTOPIC ADDED";
+      badgeColorStyle = "background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.35);";
     } else if (log.inputType === "MOCK_TEST_LOG") {
-      badgeColor = "#F59E0B";
-      badgeBg = "rgba(245, 158, 11, 0.15)";
-      actionIcon = "🧪";
-      const testName = raw.testName || "Mock Test Matrix";
-      title = `🧪 Mock Test Audit: ${testName}`;
-      const count = raw.chaptersCount || (raw.rows ? raw.rows.length : 0);
-      const mockToughnessTier = Number(raw.mockToughness || raw.rigorTier) || 2;
-      const mockToughnessLabel = raw.mockToughnessLabel || (mockToughnessTier === 3 ? "Tough (JEE Advanced)" : mockToughnessTier === 4 ? "Elite (AITS / Olympiad)" : "Standard (JEE Main)");
-
-      displayRaw.mockToughnessTier = mockToughnessTier;
-      displayRaw.mockToughnessLabel = mockToughnessLabel;
-
-      narrative = `Logged full exam post-mortem for <strong>${escapeHtml(testName)}</strong> (${escapeHtml(raw.testDate || 'Today')}) at Toughness: <strong>${escapeHtml(mockToughnessLabel)}</strong> across ${count} tested chapters with automated back-propagation.`;
-
-      chips.push(`🎯 Toughness: ${escapeHtml(mockToughnessLabel)}`);
-      if (Array.isArray(comp.affectedChapters)) {
-        comp.affectedChapters.forEach((ac) => {
-          chips.push(`${escapeHtml(ac.chapter)}: ${escapeHtml(ac.impact || 'Updated')}`);
-        });
-      }
+      badgeText = "MOCK TEST MATRIX";
+      badgeColorStyle = "background: rgba(139, 92, 246, 0.2); color: #C084FC; border: 1px solid rgba(139, 92, 246, 0.4);";
+    } else if (log.inputType === "CLOCK_SHIFT" || log.inputType === "CLOCK_SHIFT_RESET") {
+      badgeText = log.inputType === "CLOCK_SHIFT_RESET" ? "CLOCK RESET" : "CLOCK SHIFT";
+      badgeColorStyle = "background: rgba(139, 92, 246, 0.2); color: #C084FC; border: 1px solid rgba(139, 92, 246, 0.4);";
     } else if (log.inputType === "EXAM_SETTINGS_UPDATE") {
-      badgeColor = "#A78BFA";
-      badgeBg = "rgba(167, 139, 250, 0.15)";
-      actionIcon = "⚙️";
-      title = `⚙️ Exam Calibration Updated`;
-      const upd = comp.updated || comp.newSettings || {};
-      const changesList = Object.entries(upd)
-        .filter(([k]) => k !== "totalReviewsLogged")
-        .map(([k, v]) => `<strong>${escapeHtml(k)}</strong>: ${escapeHtml(String(v))}`)
-        .join(", ");
-      narrative = changesList ? `Updated system calibration parameters: ${changesList}.` : "Exam settings calibrated.";
-      Object.entries(upd).forEach(([k, v]) => {
-        if (k !== "totalReviewsLogged") chips.push(`${k}: ${v}`);
-      });
-    } else if (log.inputType === "RESTORE_BACKUP") {
-      badgeColor = "#38BDF8";
-      badgeBg = "rgba(56, 189, 248, 0.15)";
-      actionIcon = "📦";
-      title = `📦 Data Restored from Backup`;
-      narrative = `Restored state successfully from JSON backup file.`;
-      if (raw.totalChapters) chips.push(`Chapters: ${raw.totalChapters}`);
-      if (raw.totalLogs) chips.push(`Logs: ${raw.totalLogs}`);
-    } else {
-      title = `📝 ${log.inputType}`;
-      narrative = `Event recorded in ledger.`;
+      badgeText = "SETTINGS UPDATE";
+      badgeColorStyle = "background: rgba(245, 158, 11, 0.15); color: #FCD34D; border: 1px solid rgba(245, 158, 11, 0.35);";
+    } else if (log.inputType === "NOTEPAD_BARCODE_ADDED" || log.inputType === "NOTEPAD_BARCODE_DELETED") {
+      badgeText = "NOTEPAD BARCODE";
+      badgeColorStyle = "background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.35);";
+    } else if (log.inputType === "DELETE_CHAPTER") {
+      badgeText = "CHAPTER DELETED";
+      badgeColorStyle = "background: rgba(239, 68, 68, 0.15); color: #F87171; border: 1px solid rgba(239, 68, 68, 0.35);";
     }
 
-    const rawJsonStr = escapeHtml(JSON.stringify({ rawInputs: displayRaw, computedOutputs: comp }, null, 2));
+    // 2. Title & Icon
+    let title = log.inputType;
+    const isReview = ["POST_STUDY_REVIEW", "AD_HOC_REVIEW", "CRYO_FREEZE_SPRINT", "SYNTHESIS_BATTLE"].includes(log.inputType);
+    if (isReview) {
+      const chName = raw.chapterName || "Chapter";
+      if (log.inputType === "CRYO_FREEZE_SPRINT") {
+        title = `⚡ ${chName} · 10m Cryo-Freeze Recall`;
+      } else if (log.inputType === "SYNTHESIS_BATTLE") {
+        title = `⚔️ ${chName} · Synthesis Boss Battle`;
+      } else if (log.inputType === "AD_HOC_REVIEW") {
+        title = `🧭 ${chName} · Ad-Hoc Session Audit`;
+      } else {
+        title = `📘 ${chName} · Spaced Review Session`;
+      }
+    } else if (log.inputType === "NEW_CHAPTER") {
+      title = `✨ New Chapter Enrolled: ${raw.name || raw.chapterName || "Untitled"}`;
+    } else if (log.inputType === "DIVIDED_CHAPTER_CREATED") {
+      title = `🔗 Divided Chapter Chain: ${raw.macroName || "Topic"}`;
+    } else if (log.inputType === "SUBTOPIC_APPENDED") {
+      title = `➕ Added Subtopic: ${raw.name || "Topic"}`;
+    } else if (log.inputType === "SUBTOPIC_ACTIVATED") {
+      title = `🔓 Unlocked Subtopic: ${raw.name || "Topic"}`;
+    } else if (log.inputType === "MOCK_TEST_LOG") {
+      title = `📝 Mock Post-Mortem: ${raw.testName || "Full Mock Test"}`;
+    } else if (log.inputType === "CLOCK_SHIFT") {
+      const sDays = raw.shiftDays !== undefined ? raw.shiftDays : (comp.shiftDays || 0);
+      title = `⏱️ Syllabus Clock Shift: ${sDays > 0 ? '+' : ''}${sDays} Days`;
+    } else if (log.inputType === "CLOCK_SHIFT_RESET") {
+      title = `↺ Sickness Buffer Reset (${raw.revertedDays || comp.revertedDays || 0} Days Reverted)`;
+    } else if (log.inputType === "EXAM_SETTINGS_UPDATE") {
+      title = `⚙️ Exam Calibration Settings Updated`;
+    } else if (log.inputType === "NOTEPAD_BARCODE_ADDED") {
+      title = `🏷️ Registered Notepad Barcode #${raw.code || ""}`;
+    } else if (log.inputType === "DELETE_CHAPTER") {
+      title = `🗑️ Deleted Chapter: ${raw.chapterName || "Topic"}`;
+    } else if (log.inputType === "RESTORE_BACKUP") {
+      title = `💾 Restored System State Backup`;
+    }
 
-    card.innerHTML = `
+    // 3. Human Narrative (Plain English explanation)
+    let narrative = "";
+    if (isReview) {
+      if (log.inputType === "CRYO_FREEZE_SPRINT" || raw.isCryoFreeze || comp.isCryoFreeze) {
+        const shift = comp.cryoShiftDays || 2;
+        narrative = `Completed a quick 10-minute active formula & concept recall sprint (0 problems attempted). Blank-page recall score: <strong>${raw.blankPageScore || 3}/5</strong>. Memory stability preserved at <strong>${comp.S_old || comp.S_new || '?'}d</strong> with an immediate <strong>+${shift}d schedule buffer</strong> applied to protect against lapses without study fatigue.`;
+      } else {
+        const totalProb = raw.totalProblems || 0;
+        const corrProb = raw.correctProblems || 0;
+        const silly = raw.sillySlips || 0;
+        const qVal = comp.Q !== undefined ? comp.Q : (raw.Q || "?");
+        const passText = comp.passed ? '<span style="color: var(--emerald-retained); font-weight: 700;">PASSED</span>' : '<span style="color: #F87171; font-weight: 700;">LAPSED</span>';
+        const sOld = comp.S_old !== undefined ? comp.S_old : "?";
+        const sNew = comp.S_new !== undefined ? comp.S_new : "?";
+        let deltaS = "";
+        if (typeof sOld === "number" && typeof sNew === "number") {
+          const diff = sNew - sOld;
+          deltaS = ` (${diff >= 0 ? '+' : ''}${diff.toFixed(1)}d)`;
+        }
+        const nextDueStr = comp.nextDueDate ? `for <strong>${comp.nextDueDate}</strong> (in ${comp.nextDueDays || '?'} days)` : `in <strong>${comp.nextDueDays || '?'} days</strong>`;
+
+        narrative = `Attempted <strong>${totalProb} problems</strong> (${corrProb} correct, ${silly} silly slip${silly === 1 ? '' : 's'}) during a ${raw.durationMins || 45}m session. Quality Grade: <strong>Q = ${qVal}</strong> (${passText}). Memory stability shifted from <strong>${sOld}d &rarr; ${sNew}d</strong>${deltaS}. Next review scheduled ${nextDueStr}.`;
+
+        if (comp.manualIntervalOverride) {
+          narrative += ` <span style="color: #38BDF8;">(Manual Next-Interval Override applied: ${comp.manualIntervalOverride}d &rarr; implied Stability S = ${comp.S_new}d)</span>.`;
+        }
+        if (raw.faultLineNote && raw.faultLineNote !== "(None)") {
+          narrative += `<br><span style="color: var(--amber-hazard); font-size: 11.5px;">⚠️ Red-pen edge case recorded: "${escapeHtml(raw.faultLineNote)}"</span>`;
+        }
+      }
+    } else if (log.inputType === "NEW_CHAPTER") {
+      const initS = comp.initialS || comp.S || 3.2;
+      const due = comp.nextDueDays || 3;
+      narrative = `Enrolled new chapter <strong>${escapeHtml(raw.name || raw.chapterName || "Untitled")}</strong> in <strong>${escapeHtml(raw.subject || "Physics")}</strong> with difficulty <strong>D₀ = ${raw.D0 || 5.0}</strong>, starting baseline stability <strong>S₁ = ${initS}d</strong>, and importance weightage <strong>${raw.weightage || 1.0}x</strong>. Day-0 initial spaced review queued in ${due} days.`;
+    } else if (log.inputType === "DIVIDED_CHAPTER_CREATED") {
+      narrative = `Partitioned large chapter <strong>${escapeHtml(raw.macroName || "Topic")}</strong> into a sequential chain of <strong>${raw.subtopicsCount || 0} subtopics</strong>. Scaled session lengths by 60% for rapid targeted retention. Subtopic 1 unlocked immediately; subsequent subtopics set to unlock sequentially.`;
+    } else if (log.inputType === "SUBTOPIC_APPENDED") {
+      narrative = `Appended subtopic <strong>${escapeHtml(raw.name || "Topic")}</strong> (#${raw.sequenceIndex || "?"}) to group <strong>${escapeHtml(raw.groupTitle || "Macro Topic")}</strong>.`;
+    } else if (log.inputType === "SUBTOPIC_ACTIVATED") {
+      narrative = `Unlocked subtopic <strong>${escapeHtml(raw.name || "Topic")}</strong> in <strong>${escapeHtml(raw.groupTitle || "Group")}</strong> and scheduled its Day-0 review.`;
+    } else if (log.inputType === "CLOCK_SHIFT") {
+      const days = raw.shiftDays !== undefined ? raw.shiftDays : (comp.shiftDays || 0);
+      const sign = days > 0 ? `+${days}` : `${days}`;
+      narrative = `Shifted syllabus preparation clock by <strong>${sign} days</strong> across <strong>${raw.activeChaptersCount || comp.count || 0} active chapters</strong>. Total applied sickness/emergency clock buffer is now <strong>${raw.totalClockShiftDays || comp.totalClockShiftDays || 0} days</strong>.`;
+    } else if (log.inputType === "CLOCK_SHIFT_RESET") {
+      narrative = `Reverted all <strong>${raw.revertedDays || comp.revertedDays || 0} sickness buffer days</strong> across <strong>${raw.activeChaptersCount || comp.count || 0} active chapters</strong>. Total sickness buffer returned to <strong>0 days</strong>.`;
+    } else if (log.inputType === "MOCK_TEST_LOG") {
+      narrative = `Recorded mock test post-mortem for <strong>${escapeHtml(raw.testName || "Mock")}</strong> (${escapeHtml(raw.testDate || "Today")}). Processed performance across questions with concept lapse back-propagation to prerequisite chapters.`;
+    } else if (log.inputType === "EXAM_SETTINGS_UPDATE") {
+      narrative = `Updated user calibration parameters and examination milestones.`;
+    } else if (log.inputType === "NOTEPAD_BARCODE_ADDED") {
+      narrative = `Linked physical red-pen audit reference <strong>#${escapeHtml(raw.code || "")}</strong> (${escapeHtml(raw.location || "Notepad")}) to chapter.`;
+    } else if (log.inputType === "DELETE_CHAPTER") {
+      narrative = `Permanently removed chapter <strong>${escapeHtml(raw.chapterName || "Topic")}</strong> and pruned associated dependency links.`;
+    } else if (log.inputType === "RESTORE_BACKUP") {
+      narrative = `Restored database state from backup JSON archive (${raw.totalChapters || 0} chapters, ${raw.totalLogs || 0} audit logs).`;
+    } else {
+      narrative = escapeHtml(comp.message || "User operation executed and verified.");
+    }
+
+    // 4. Parameter Chips Row
+    const chips = [];
+    if (isReview) {
+      if (comp.Q !== undefined) chips.push(`<span class="log-chip" style="color: ${comp.passed ? 'var(--emerald-retained)' : '#F87171'}; font-weight: 700;">Q = ${comp.Q}</span>`);
+      if (raw.blankPageScore !== undefined) chips.push(`<span class="log-chip">Blank-Page: ${raw.blankPageScore}/5</span>`);
+      if (comp.rigorLabel) chips.push(`<span class="log-chip" style="color: var(--cyan-core);">🎯 ${comp.rigorLabel} (${(comp.rigorMult || 1).toFixed(2)}x)</span>`);
+      if (comp.P_adj !== undefined) chips.push(`<span class="log-chip">Mastery: ${comp.P_adj}%</span>`);
+      if (raw.totalProblems > 0) chips.push(`<span class="log-chip">Problems: ${raw.correctProblems}/${raw.totalProblems}</span>`);
+      if (raw.sillySlips > 0) chips.push(`<span class="log-chip" style="color: #FCD34D;">Silly Slips: ${raw.sillySlips}</span>`);
+      if (comp.S_new !== undefined) chips.push(`<span class="log-chip">Stability: ${comp.S_old !== undefined ? comp.S_old + 'd → ' : ''}${comp.S_new}d</span>`);
+      if (comp.D_new !== undefined) chips.push(`<span class="log-chip">Difficulty: ${comp.D_new}</span>`);
+      if (raw.durationMins) chips.push(`<span class="log-chip">Duration: ${raw.durationMins}m</span>`);
+      if (comp.nextDueDays !== undefined) chips.push(`<span class="log-chip" style="color: var(--cyan-core);">Next Due: in ${comp.nextDueDays}d</span>`);
+      if (comp.manualIntervalOverride) chips.push(`<span class="log-chip" style="color: #38BDF8; font-weight: 700;">Override: ${comp.manualIntervalOverride}d</span>`);
+    } else if (log.inputType === "NEW_CHAPTER") {
+      if (raw.subject) chips.push(`<span class="log-chip">${raw.subject}</span>`);
+      if (raw.D0) chips.push(`<span class="log-chip">D₀: ${raw.D0}</span>`);
+      if (comp.initialS || comp.S) chips.push(`<span class="log-chip">S₁: ${comp.initialS || comp.S}d</span>`);
+      if (raw.weightage) chips.push(`<span class="log-chip">Weightage: ${raw.weightage}x</span>`);
+      if (comp.nextDueDays) chips.push(`<span class="log-chip">First Due: in ${comp.nextDueDays}d</span>`);
+    } else if (log.inputType === "CLOCK_SHIFT") {
+      const days = raw.shiftDays !== undefined ? raw.shiftDays : (comp.shiftDays || 0);
+      chips.push(`<span class="log-chip" style="color: #C084FC; font-weight: 700;">Shift: ${days > 0 ? '+' : ''}${days}d</span>`);
+      if (raw.totalClockShiftDays !== undefined || comp.totalClockShiftDays !== undefined) {
+        chips.push(`<span class="log-chip">Total Buffer: ${raw.totalClockShiftDays || comp.totalClockShiftDays}d</span>`);
+      }
+      if (raw.activeChaptersCount || comp.count) chips.push(`<span class="log-chip">Active Chapters: ${raw.activeChaptersCount || comp.count}</span>`);
+    } else if (log.inputType === "CLOCK_SHIFT_RESET") {
+      chips.push(`<span class="log-chip" style="color: #FCD34D; font-weight: 700;">Reverted: ${raw.revertedDays || comp.revertedDays || 0}d</span>`);
+      chips.push(`<span class="log-chip">Active Chapters: ${raw.activeChaptersCount || comp.count || 0}</span>`);
+    }
+
+    const chipsHtml = chips.length > 0 ? `<div class="log-chips-row">${chips.join("")}</div>` : "";
+
+    div.innerHTML = `
       <div class="log-top-row">
-        <span class="log-badge mono" style="color: ${badgeColor}; background: ${badgeBg};">
-          ${escapeHtml(log.inputType)}
-        </span>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span class="mono" style="font-size: 11px; color: var(--text-dim);">
-            ${escapeHtml(log.displayDate)} · ${escapeHtml(log.displayTime)}
-          </span>
-          <button class="btn-delete-log" title="Delete this record" style="background: transparent; border: none; color: #EF4444; cursor: pointer; padding: 2px 4px; display: flex; align-items: center; justify-content: center; opacity: 0.85;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-          </button>
+          <span class="log-badge mono" style="${badgeColorStyle}">${escapeHtml(badgeText)}</span>
+          <span class="mono" style="font-size: 11px; color: var(--text-dim);">${log.displayDate} · ${log.displayTime}</span>
         </div>
+        <button class="secondary-btn btn-del-log" data-id="${log.id}" style="padding: 2px 7px; font-size: 11px; color: #F87171; border-color: rgba(239, 68, 68, 0.3);" title="Delete Record">
+          🗑️
+        </button>
       </div>
-      <div class="log-entry-path">
-        <span>Via: ${escapeHtml(log.entryMethod)}</span>
-      </div>
+
       <div class="log-title-row">
-        <span>${title}</span>
+        <span>${escapeHtml(title)}</span>
       </div>
+
+      <div class="log-entry-path">
+        📍 Path: <span class="mono">${escapeHtml(log.entryMethod || "Manual Action")}</span>
+      </div>
+
       <div class="log-narrative">
         ${narrative}
       </div>
-      ${chips.length > 0 ? `<div class="log-chips-row">${chips.map((c) => `<span class="log-chip">${c}</span>`).join('')}</div>` : ''}
-      <button class="log-json-toggle">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="6 9 12 15 18 9"></polyline>
-        </svg>
-        <span>Toggle Raw Telemetry & Math</span>
+
+      ${chipsHtml}
+
+      <button type="button" class="log-json-toggle">
+        <span class="toggle-icon">▶</span>
+        <span>Show Raw Parameters & Schema</span>
       </button>
+
       <div class="log-details-table">
-        <pre>${rawJsonStr}</pre>
+        <pre class="mono" style="font-size: 10.5px; color: #CBD5E1; margin: 0; white-space: pre-wrap; word-break: break-all;">${escapeHtml(JSON.stringify({ id: log.id, inputType: log.inputType, entryMethod: log.entryMethod, rawInputs: log.rawInputs, computedOutputs: log.computedOutputs }, null, 2))}</pre>
       </div>
     `;
 
-    const btnDel = card.querySelector(".btn-delete-log");
-    if (btnDel) {
-      btnDel.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (confirm("Delete this entry from the audit ledger?")) {
-          DSRStore.deleteAuditLog(log.id);
-          showToast("Audit log entry deleted.");
-        }
-      });
-    }
-
-    const btnToggle = card.querySelector(".log-json-toggle");
-    const drawer = card.querySelector(".log-details-table");
-    btnToggle.addEventListener("click", () => {
-      drawer.classList.toggle("open");
-      btnToggle.querySelector("span").textContent = drawer.classList.contains("open")
-        ? "Hide Raw Telemetry"
-        : "Toggle Raw Telemetry & Math";
+    // Collapsible Raw Parameters & JSON box
+    const toggleBtn = div.querySelector(".log-json-toggle");
+    const detailsBox = div.querySelector(".log-details-table");
+    const toggleIcon = div.querySelector(".toggle-icon");
+    toggleBtn.addEventListener("click", () => {
+      const isOpen = detailsBox.classList.toggle("open");
+      toggleIcon.textContent = isOpen ? "▼" : "▶";
+      toggleBtn.querySelector("span:last-child").textContent = isOpen ? "Hide Raw Parameters & Schema" : "Show Raw Parameters & Schema";
     });
 
-    return card;
+    // Delete Log Handler
+    div.querySelector(".btn-del-log").addEventListener("click", (e) => {
+      e.stopPropagation();
+      DSRStore.deleteAuditLog(log.id);
+      renderAuditLedger();
+      showToast("Audit record deleted.");
+    });
+
+    return div;
   }
 
   function renderCurrentView() {
@@ -629,17 +1171,13 @@
   // -------------------------------------------------------------
   // MODAL 1: ADD NEW CHAPTER CONTROLLER
   // -------------------------------------------------------------
-  let newChapterSubject = "Physics";
-  let newChapterWeightage = 1.0;
-
   function initAddChapterModal() {
+    // Segmented controls for Subject & Weightage
     document.querySelectorAll("#segNewSubject .segmented-option").forEach((opt) => {
       opt.addEventListener("click", () => {
         document.querySelectorAll("#segNewSubject .segmented-option").forEach((o) => o.classList.remove("active"));
         opt.classList.add("active");
-        newChapterSubject = opt.getAttribute("data-value");
         renderParentPrerequisitesList();
-        updateNewChapterPreview();
       });
     });
 
@@ -647,112 +1185,83 @@
       opt.addEventListener("click", () => {
         document.querySelectorAll("#segNewWeightage .segmented-option").forEach((o) => o.classList.remove("active"));
         opt.classList.add("active");
-        newChapterWeightage = Number(opt.getAttribute("data-value"));
-        updateNewChapterPreview();
       });
     });
 
-    const sliderD0 = document.getElementById("sliderNewD0");
-    const lblD0 = document.getElementById("lblNewD0Val");
-    sliderD0.addEventListener("input", () => {
-      lblD0.textContent = Number(sliderD0.value).toFixed(1);
+    const slider = document.getElementById("sliderNewD0");
+    slider.addEventListener("input", (e) => {
+      document.getElementById("lblNewD0Val").textContent = Number(e.target.value).toFixed(1);
       updateNewChapterPreview();
     });
 
     document.getElementById("btnSaveNewChapter").addEventListener("click", () => {
-      const titleInput = document.getElementById("inpNewChapterName");
-      const title = titleInput.value.trim();
-      if (!title) {
+      const name = document.getElementById("inpNewChapterName").value.trim();
+      if (!name) {
         showToast("Please enter a chapter title.");
-        titleInput.focus();
         return;
       }
 
-      // Collect selected parents
+      const subject = document.querySelector("#segNewSubject .segmented-option.active").getAttribute("data-value");
+      const D0 = Number(document.getElementById("sliderNewD0").value);
+      const weightage = Number(document.querySelector("#segNewWeightage .segmented-option.active").getAttribute("data-value"));
+
       const parents = [];
-      document.querySelectorAll(".parent-prereq-checkbox:checked").forEach((chk) => {
-        const parentId = chk.getAttribute("data-parent-id");
-        const slider = document.querySelector(`.parent-weight-slider[data-parent-id="${parentId}"]`);
-        const weight = slider ? Number(slider.value) : 0.40;
-        parents.push({ parentId, couplingWeight: weight });
+      document.querySelectorAll(".parent-coupling-input").forEach((inp) => {
+        const val = Number(inp.value);
+        if (val > 0) {
+          parents.push({
+            parentId: inp.getAttribute("data-parent-id"),
+            couplingWeight: DSREngine.clamp(0.1, 1.0, val / 100)
+          });
+        }
       });
 
-      const d0 = Number(sliderD0.value);
-      DSRStore.addChapter({
-        name: title,
-        subject: newChapterSubject,
-        D0: d0,
-        weightage: newChapterWeightage,
-        parents
-      });
-
-      titleInput.value = "";
+      DSRStore.addChapter({ name, subject, D0, weightage, parents });
+      document.getElementById("inpNewChapterName").value = "";
       closeAllModals();
-      showToast(`Added ${title} (Day-0 initialized)`);
+      showToast(`Added ${name} with starting S=${DSREngine.calculateInitialStability(D0, 4.0)}d`, true);
+      renderDashboard();
     });
   }
 
   function renderParentPrerequisitesList() {
-    const listWrap = document.getElementById("newChapterParentsList");
+    const list = document.getElementById("newChapterParentsList");
+    list.innerHTML = "";
+    const activeSubject = document.querySelector("#segNewSubject .segmented-option.active")?.getAttribute("data-value") || "Physics";
     const state = DSRStore.getState();
-    const sameSubject = state.chapters.filter((c) => c.subject === newChapterSubject);
+    const candidateParents = DSRStore.getActiveChapters(state.chapters).filter((c) => c.subject === activeSubject && !c.isSubtopic);
 
-    listWrap.innerHTML = "";
-    if (sameSubject.length === 0) {
-      listWrap.innerHTML = `<div style="font-size: 11px; color: var(--text-dim);">No existing ${newChapterSubject} chapters to link as prerequisites.</div>`;
+    if (candidateParents.length === 0) {
+      list.innerHTML = `<span style="font-size: 11px; color: var(--text-dim); font-style: italic;">No prior ${activeSubject} chapters available to link as prerequisites.</span>`;
       return;
     }
 
-    sameSubject.forEach((ch) => {
+    candidateParents.forEach((p) => {
       const row = document.createElement("div");
-      row.style.background = "var(--bg-card)";
-      row.style.border = "1px solid var(--border-subtle)";
-      row.style.borderRadius = "var(--radius-sm)";
-      row.style.padding = "8px 10px";
       row.style.display = "flex";
-      row.style.flexDirection = "column";
-      row.style.gap = "6px";
+      row.style.alignItems = "center";
+      row.style.justifyContent = "space-between";
+      row.style.background = "var(--bg-card)";
+      row.style.padding = "6px 10px";
+      row.style.borderRadius = "var(--radius-sm)";
+      row.style.border = "1px solid var(--border-subtle)";
 
       row.innerHTML = `
-        <div style="display: flex; align-items: center; justify-content: space-between;">
-          <label style="display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; cursor: pointer;">
-            <input type="checkbox" class="parent-prereq-checkbox" data-parent-id="${ch.id}" />
-            <span>${escapeHtml(ch.name)}</span>
-          </label>
-          <span class="mono parent-weight-label" data-parent-id="${ch.id}" style="font-size: 11px; color: var(--cyan-core); display: none;">40% coupling</span>
-        </div>
-        <div class="parent-slider-wrap" data-parent-id="${ch.id}" style="display: none; flex-direction: column; gap: 2px;">
-          <input type="range" class="range-input parent-weight-slider" data-parent-id="${ch.id}" min="0.10" max="0.60" step="0.05" value="0.40" />
+        <span style="font-size: 12px; font-weight: 600;">${escapeHtml(p.name)}</span>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span style="font-size: 10px; color: var(--text-dim);">Coupling:</span>
+          <input type="number" class="form-input mono parent-coupling-input" data-parent-id="${p.id}" min="0" max="100" step="5" value="0" style="width: 55px; padding: 2px 4px; font-size: 11px; text-align: center;" />
+          <span style="font-size: 10px; color: var(--text-dim);">%</span>
         </div>
       `;
-
-      const chk = row.querySelector(".parent-prereq-checkbox");
-      const sliderWrap = row.querySelector(".parent-slider-wrap");
-      const weightLbl = row.querySelector(".parent-weight-label");
-      const slider = row.querySelector(".parent-weight-slider");
-
-      chk.addEventListener("change", () => {
-        if (chk.checked) {
-          sliderWrap.style.display = "flex";
-          weightLbl.style.display = "inline";
-        } else {
-          sliderWrap.style.display = "none";
-          weightLbl.style.display = "none";
-        }
-      });
-
-      slider.addEventListener("input", () => {
-        weightLbl.textContent = `${Math.round(slider.value * 100)}% coupling`;
-      });
-
-      listWrap.appendChild(row);
+      list.appendChild(row);
     });
   }
 
   function updateNewChapterPreview() {
     const d0 = Number(document.getElementById("sliderNewD0").value);
-    const S1 = DSREngine.calculateInitialStability(d0, 4.0);
-    const tier = DSREngine.getSessionTier(S1);
+    const S1 = DSREngine.calculateInitialStability(d0, 4.0, false);
+    const tier = DSREngine.getSessionTier(S1, 1.0, false);
     const settings = DSRStore.getState().settings;
 
     const mockChapter = { D0: d0, D: d0, S: S1 };
@@ -845,7 +1354,7 @@
     });
 
     document.getElementById("btnIncSilly").addEventListener("click", () => {
-      const total = Number(inpTotal.value) || 10;
+      const total = Number(inpTotal.value) || 0;
       const correct = Number(inpCorrect.value) || 0;
       const wrong = Math.max(0, total - correct);
       if (postStudySillySlips < wrong) {
@@ -857,6 +1366,50 @@
     });
 
     document.getElementById("inpDurationMins").addEventListener("input", updatePostStudyLivePreview);
+
+    // Live recalculation on Manual Next-Interval Override
+    const inpCustomInterval = document.getElementById("inpCustomNextInterval");
+    if (inpCustomInterval) {
+      inpCustomInterval.addEventListener("input", updatePostStudyLivePreview);
+    }
+
+    // Modal B Add Physical Notepad Barcode
+    const btnAddNotepadModal = document.getElementById("btnAddNotepadIdModal");
+    if (btnAddNotepadModal) {
+      btnAddNotepadModal.addEventListener("click", () => {
+        const state = DSRStore.getState();
+        const chapter = state.chapters.find((c) => c.id === currentAuditingChapterId);
+        if (!chapter) return;
+        const inpCode = document.getElementById("inpNotepadCode");
+        const inpLoc = document.getElementById("inpNotepadLoc");
+        const inpSum = document.getElementById("inpNotepadSummary");
+        const code = inpCode ? inpCode.value.trim() : "";
+        if (!code) {
+          showToast("Please enter a Barcode / ID (e.g., ROT-03).");
+          return;
+        }
+        const loc = (inpLoc ? inpLoc.value.trim() : "") || "Physical Notepad";
+        const sum = (inpSum ? inpSum.value.trim() : "");
+        const added = DSRStore.addNotepadIdToChapter(chapter.id, { code, location: loc, summary: sum });
+        if (added) {
+          if (inpCode) inpCode.value = "";
+          if (inpLoc) inpLoc.value = "";
+          if (inpSum) inpSum.value = "";
+          renderModalNotepadPills(chapter);
+          showToast(`Registered barcode #${added.code} to ${chapter.name}!`, true);
+        }
+      });
+    }
+
+    // Modal B Fault-Line Severity Selector (1x, 2x, 3x clean streak)
+    document.querySelectorAll(".fl-severity-opt").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        selectedFaultLineSeverity = Number(btn.getAttribute("data-severity")) || 2;
+        document.querySelectorAll(".fl-severity-opt").forEach((b) => {
+          b.classList.toggle("active", b === btn);
+        });
+      });
+    });
 
     document.getElementById("postStudyChapterSelect").addEventListener("change", (e) => {
       currentAuditingChapterId = e.target.value;
@@ -874,14 +1427,20 @@
   }
 
   function validateProblemsInput() {
-    const total = Math.max(1, Number(document.getElementById("inpTotalProblems").value) || 10);
+    const totalVal = document.getElementById("inpTotalProblems").value;
+    const total = totalVal === "" ? 0 : Math.max(0, Number(totalVal));
     let correct = Number(document.getElementById("inpCorrectProblems").value);
     if (isNaN(correct)) correct = 0;
     correct = DSREngine.clamp(0, total, correct);
     document.getElementById("inpCorrectProblems").value = correct;
 
     const wrong = total - correct;
-    document.getElementById("lblTotalWrong").textContent = `${wrong} Wrong Answer${wrong === 1 ? '' : 's'}`;
+    if (total === 0) {
+      document.getElementById("lblTotalWrong").textContent = "0 Problems (Cryo-Freeze / Formula Sprint)";
+      postStudySillySlips = 0;
+    } else {
+      document.getElementById("lblTotalWrong").textContent = `${wrong} Wrong Answer${wrong === 1 ? '' : 's'}`;
+    }
 
     if (postStudySillySlips > wrong) {
       postStudySillySlips = wrong;
@@ -889,6 +1448,84 @@
     document.getElementById("lblSillyVal").textContent = postStudySillySlips;
     const blanks = wrong - postStudySillySlips;
     document.getElementById("lblConceptBlanksVal").textContent = `${blanks} Blank${blanks === 1 ? '' : 's'}`;
+  }
+
+  function renderModalNotepadPills(chapter) {
+    const container = document.getElementById("modalNotepadPillsContainer");
+    if (!container) return;
+    container.innerHTML = "";
+    const list = Array.isArray(chapter.notepadIds) ? chapter.notepadIds : [];
+    if (list.length === 0) {
+      container.innerHTML = `<span style="font-size: 11px; color: var(--text-dim); font-style: italic;">No red-pen IDs registered for this chapter yet.</span>`;
+      return;
+    }
+    list.forEach((item) => {
+      const chip = document.createElement("div");
+      chip.className = "notepad-pill";
+      chip.textContent = `#${item.code}: ${item.location}`;
+      chip.title = `${item.code} [${item.location}]: ${item.summary || "No notes"} (Click to inspect)`;
+      chip.addEventListener("click", () => {
+        showToast(`🏷️ [#${item.code}] ${item.location}: ${item.summary || "No notes"}`, false, 4500);
+      });
+      container.appendChild(chip);
+    });
+  }
+
+  function renderModalFaultLineChecklist(chapter) {
+    const container = document.getElementById("modalFaultLineChecklist");
+    if (!container) return;
+    container.innerHTML = "";
+    const activeTraps = Array.isArray(chapter.faultLineVault) ? chapter.faultLineVault.filter((t) => !t.graduated) : [];
+
+    if (activeTraps.length === 0) {
+      container.innerHTML = `<div style="font-size: 11px; color: var(--text-dim); font-style: italic; padding: 4px 0;">No active traps logged for this topic yet.</div>`;
+      return;
+    }
+
+    activeTraps.forEach((trap) => {
+      const row = document.createElement("div");
+      row.className = "fl-checklist-row";
+      row.style.display = "flex";
+      row.style.alignItems = "flex-start";
+      row.style.gap = "8px";
+
+      const req = trap.requiredStreak || 2;
+      const streak = Number(trap.cleanStreak) || 0;
+      const curDots = Math.min(req, Math.max(0, streak));
+      const dots = "●".repeat(curDots) + "○".repeat(req - curDots);
+      const badgeText = req === 1 ? "Min · 1x" : req === 3 ? "Crit · 3x" : "Std · 2x";
+      const badgeClass = req === 1 ? "fl-pill-minor" : req === 3 ? "fl-pill-critical" : "fl-pill-standard";
+      const progressText = `Progress: ${dots} (${curDots}/${req} in a row)`;
+
+      row.innerHTML = `
+        <input type="checkbox" id="chk_fl_${trap.id}" data-fl-id="${trap.id}" style="margin-top: 3px;" />
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 3px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px;">
+            <span style="font-size: 12px; font-weight: 600; color: var(--text-main);">${escapeHtml(trap.note)}</span>
+            <button type="button" class="fl-severity-badge ${badgeClass} btn-toggle-fl-req" data-fl-id="${trap.id}" title="Tap to cycle required clean streak (1x -> 2x -> 3x)">
+              ${badgeText}
+            </button>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim);">
+            <span class="mono" style="color: ${streak >= req ? 'var(--emerald-retained)' : '#FCD34D'};">${progressText}</span>
+            <span>Missed ${trap.missCount || 1}x</span>
+          </div>
+        </div>
+      `;
+
+      // Cycle severity on tap
+      row.querySelector(".btn-toggle-fl-req").addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const currentReq = trap.requiredStreak || 2;
+        const nextReq = (currentReq % 3) + 1;
+        DSRStore.updateFaultLineRequiredStreak(chapter.id, trap.id, nextReq);
+        renderModalFaultLineChecklist(chapter);
+        showToast(`Updated "${trap.note}" severity to ${nextReq}x clean recalls!`);
+      });
+
+      container.appendChild(row);
+    });
   }
 
   function openPostStudyModal(chapterId, isAdHoc = false) {
@@ -902,7 +1539,7 @@
 
     if (isAdHoc) {
       selectorWrap.style.display = "flex";
-      select.innerHTML = state.chapters
+      select.innerHTML = DSRStore.getActiveChapters(state.chapters)
         .map((c) => `<option value="${c.id}" ${c.id === chapterId ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.subject)})</option>`)
         .join("");
       document.getElementById("postStudyModalTitle").textContent = "Ad-Hoc Session Audit";
@@ -930,13 +1567,41 @@
     const chapter = state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return;
 
-    const tier = DSREngine.getSessionTier(chapter.S);
-    document.getElementById("inpTotalProblems").value = tier.recommendedProblems;
-    document.getElementById("inpCorrectProblems").value = Math.max(1, tier.recommendedProblems - 2);
-    document.getElementById("inpDurationMins").value = tier.durationMins;
-    document.getElementById("inpFaultLineNote").value = "";
+    const tier = DSREngine.getSessionTier(chapter.S, 1.0, !!chapter.isSubtopic);
 
-    // Auto-Selection Logic: If Tier 1, pre-select Tier 2. If Tier 2 or 3, pre-select Tier 3.
+    // Pre-fill for Sprint Mode if toggled (Requirement 4 & 5.3)
+    if (isSprintModeActive) {
+      document.getElementById("inpTotalProblems").value = 0;
+      document.getElementById("inpCorrectProblems").value = 0;
+      document.getElementById("inpDurationMins").value = 10;
+    } else {
+      document.getElementById("inpTotalProblems").value = tier.recommendedProblems;
+      document.getElementById("inpCorrectProblems").value = Math.max(1, tier.recommendedProblems - 2);
+      document.getElementById("inpDurationMins").value = tier.durationMins;
+    }
+
+    document.getElementById("inpFaultLineNote").value = "";
+    selectedFaultLineSeverity = 2;
+    document.querySelectorAll(".fl-severity-opt").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-severity") === "2");
+    });
+
+    // Reset Notepad ID inputs and render existing pills
+    const inpCode = document.getElementById("inpNotepadCode");
+    if (inpCode) inpCode.value = "";
+    const inpLoc = document.getElementById("inpNotepadLoc");
+    if (inpLoc) inpLoc.value = "";
+    const inpSum = document.getElementById("inpNotepadSummary");
+    if (inpSum) inpSum.value = "";
+    renderModalNotepadPills(chapter);
+
+    // Reset Custom Next Interval Override
+    const inpCustom = document.getElementById("inpCustomNextInterval");
+    if (inpCustom) inpCustom.value = "";
+
+    // Render Fault-Line Checklist for existing traps
+    renderModalFaultLineChecklist(chapter);
+
     if (tier.tier === 1) {
       setPostStudyRigorTier(2);
     } else {
@@ -944,7 +1609,7 @@
     }
 
     postStudyBlankPageScore = 3;
-    postStudySillySlips = 1;
+    postStudySillySlips = 0;
     document.querySelectorAll("#starRatingGroup .star-btn").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-val") === "3");
     });
@@ -959,7 +1624,7 @@
     if (!chapter) return;
 
     const totalVal = document.getElementById("inpTotalProblems").value;
-    const totalProblems = totalVal === "" ? 10 : Math.max(0, Number(totalVal));
+    const totalProblems = totalVal === "" ? 0 : Math.max(0, Number(totalVal));
     const correctProblems = Number(document.getElementById("inpCorrectProblems").value) || 0;
     const durationMins = Number(document.getElementById("inpDurationMins").value) || 30;
 
@@ -977,19 +1642,34 @@
 
     // Q Grade display
     const qColor = outcome.passed ? "var(--emerald-retained)" : "#F87171";
-    document.getElementById("prevQGrade").innerHTML = `<span style="color: ${qColor};">Q = ${outcome.Q} (${outcome.passed ? 'PASSED' : 'LAPSED'})</span>`;
-    document.getElementById("prevAccuracy").textContent = `Mastery: ${outcome.P_adj}% (Raw: ${outcome.P_true}%) | Rigor Mult: ${outcome.rigorMult.toFixed(2)}x`;
-    document.getElementById("prevStabilityShift").textContent = `${outcome.S_old}d → ${outcome.S_new}d`;
+    const modeLabel = outcome.isCryoFreeze ? " · 10m Cryo-Freeze" : "";
+    document.getElementById("prevQGrade").innerHTML = `<span style="color: ${qColor};">Q = ${outcome.Q} (${outcome.passed ? 'PASSED' : 'LAPSED'})${modeLabel}</span>`;
+    document.getElementById("prevAccuracy").textContent = outcome.isCryoFreeze
+      ? `Active Recall Sprint (0 Problems) · Shift: +${outcome.cryoShiftDays}d buffer`
+      : `Mastery: ${outcome.P_adj}% (Raw: ${outcome.P_true}%) | Rigor Mult: ${outcome.rigorMult.toFixed(2)}x`;
+    document.getElementById("prevStabilityShift").textContent = outcome.isCryoFreeze
+      ? `${outcome.S_old}d (Unchanged, +${outcome.cryoShiftDays}d schedule buffer)`
+      : `${outcome.S_old}d → ${outcome.S_new}d`;
 
-    // Next due preview
+    // Next due preview & Custom Interval Override
+    const customIntVal = document.getElementById("inpCustomNextInterval") ? document.getElementById("inpCustomNextInterval").value.trim() : "";
     const mockUpdatedChapter = { ...chapter, S: outcome.S_new, D: outcome.D_new };
-    const nextInterval = DSREngine.calculateNextIntervalDays(mockUpdatedChapter, state.settings, Date.now());
-    const nextDate = new Date(Date.now() + nextInterval * 86400000).toLocaleDateString("en-US", {
+    const autoInterval = DSREngine.calculateNextIntervalDays(mockUpdatedChapter, state.settings, Date.now());
+    
+    const inpCustom = document.getElementById("inpCustomNextInterval");
+    if (inpCustom) {
+      inpCustom.placeholder = `Auto (${autoInterval}d)`;
+    }
+
+    const manualInterval = customIntVal !== "" ? parseFloat(customIntVal) : null;
+    const finalInterval = (manualInterval && manualInterval > 0) ? manualInterval : autoInterval;
+    const nextDate = new Date(Date.now() + finalInterval * 86400000).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric"
     });
-    document.getElementById("prevNextDue").textContent = `${nextDate} (in ${nextInterval}d)`;
-    document.getElementById("prevTierShift").textContent = `${DSREngine.getSessionTier(chapter.S).name} → ${outcome.newTierInfo.name}`;
+    const overrideLabel = (manualInterval && manualInterval > 0) ? " [Manual Override]" : "";
+    document.getElementById("prevNextDue").textContent = `${nextDate} (in ${finalInterval}d)${overrideLabel}`;
+    document.getElementById("prevTierShift").textContent = `${DSREngine.getSessionTier(chapter.S, 1.0, !!chapter.isSubtopic).name} → ${outcome.newTierInfo.name}`;
 
     // Conditional Parent Blame checkbox
     const parentBlameWrap = document.getElementById("parentBlameWrap");
@@ -1008,7 +1688,7 @@
 
     // Parent boost preview
     const parentBoostRow = document.getElementById("prevParentBoostRow");
-    if (outcome.passed && Array.isArray(chapter.parents) && chapter.parents.length > 0) {
+    if (outcome.passed && !outcome.isCryoFreeze && Array.isArray(chapter.parents) && chapter.parents.length > 0) {
       const firstParent = chapter.parents[0];
       const pch = state.chapters.find((c) => c.id === firstParent.parentId);
       if (pch) {
@@ -1035,8 +1715,10 @@
       return;
     }
 
+    DSRStore.captureUndoSnapshot(`Session Audit: ${chapter.name}`);
+
     const totalVal = document.getElementById("inpTotalProblems").value;
-    const totalProblems = totalVal === "" ? 10 : Math.max(0, Number(totalVal));
+    const totalProblems = totalVal === "" ? 0 : Math.max(0, Number(totalVal));
     const correctProblems = Number(document.getElementById("inpCorrectProblems").value) || 0;
     const durationMins = Number(document.getElementById("inpDurationMins").value) || 30;
     const faultLineNote = document.getElementById("inpFaultLineNote").value.trim();
@@ -1055,46 +1737,121 @@
 
     const outcome = DSREngine.evaluateStudySession(chapter, inputs, state.settings, now);
 
+    // Custom Next Interval Override
+    const customIntVal = document.getElementById("inpCustomNextInterval") ? document.getElementById("inpCustomNextInterval").value.trim() : "";
+    const manualInterval = customIntVal !== "" ? parseFloat(customIntVal) : null;
+    if (manualInterval && manualInterval > 0) {
+      const customS = DSREngine.calculateStabilityForInterval(manualInterval, { ...chapter, D: outcome.D_new }, state.settings, now);
+      outcome.S_new = customS;
+      chapter.S = customS;
+      chapter.lastDirectS = customS;
+      outcome.manualIntervalOverride = manualInterval;
+    } else {
+      chapter.S = outcome.S_new;
+    }
+
     // Apply Chapter updates
-    chapter.S = outcome.S_new;
     chapter.D = outcome.D_new;
     chapter.hazardIndex = outcome.newHazardIndex;
     chapter.lapses = outcome.newLapses;
-    chapter.lastReviewTimestamp = now;
-    if (outcome.passed) {
-      chapter.lastDirectS = outcome.S_new;
+    chapter.forcedUrgent = false;
+
+    if (outcome.isCryoFreeze) {
+      // 10-Min Cryo-Freeze Refresher: Advance lastReviewTimestamp by buffer days, keep lastDirectReviewTimestamp intact
+      const shiftMs = (outcome.cryoShiftDays || 0) * 86400000;
+      chapter.lastReviewTimestamp = Math.min(now, (Number(chapter.lastReviewTimestamp) || now) + shiftMs);
+    } else {
+      chapter.lastReviewTimestamp = now;
+      chapter.lastDirectReviewTimestamp = now;
+      if (outcome.passed) {
+        chapter.lastDirectS = outcome.S_new;
+      }
     }
 
-    // Append to Fault-Line Vault if provided
+    // Evaluate Fault-Line Vault Checklist & Graduation (Severity Aware)
+    const activeTraps = Array.isArray(chapter.faultLineVault) ? chapter.faultLineVault.filter((t) => !t.graduated) : [];
+    activeTraps.forEach((trap) => {
+      const chk = document.getElementById(`chk_fl_${trap.id}`);
+      const isChecked = chk && chk.checked;
+      const targetReq = trap.requiredStreak || 2;
+      if (isChecked && outcome.passed) {
+        trap.cleanStreak = (trap.cleanStreak || 0) + 1;
+        trap.lastUpdated = new Date().toISOString().split("T")[0];
+        if (trap.cleanStreak >= targetReq) {
+          trap.graduated = true;
+        }
+      } else if (!isChecked && !outcome.isCryoFreeze) {
+        trap.cleanStreak = 0;
+        trap.missCount = (trap.missCount || 1) + 1;
+        trap.lastUpdated = new Date().toISOString().split("T")[0];
+      }
+    });
+
+    // New Fault-Line input with selected severity
     if (faultLineNote) {
       if (!Array.isArray(chapter.faultLineVault)) chapter.faultLineVault = [];
-      chapter.faultLineVault.unshift({
-        id: "fl_" + Date.now(),
-        note: faultLineNote,
-        missCount: 1,
-        lastMissed: new Date().toISOString().split("T")[0]
-      });
+      const existing = chapter.faultLineVault.find((t) => t.note.trim().toLowerCase() === faultLineNote.toLowerCase());
+      if (existing) {
+        existing.graduated = false;
+        existing.cleanStreak = 0;
+        existing.missCount = (existing.missCount || 1) + 1;
+        existing.requiredStreak = selectedFaultLineSeverity || 2;
+        existing.lastUpdated = new Date().toISOString().split("T")[0];
+      } else {
+        chapter.faultLineVault.unshift({
+          id: "fl_" + Date.now(),
+          note: faultLineNote,
+          requiredStreak: selectedFaultLineSeverity || 2,
+          missCount: 1,
+          cleanStreak: 0,
+          graduated: false,
+          lastUpdated: new Date().toISOString().split("T")[0]
+        });
+      }
     }
 
-    // Parent Graph Propagation
+    // Auto-save physical notepad barcode if entered in Modal B
+    const npCodeInput = document.getElementById("inpNotepadCode");
+    const npCode = npCodeInput ? npCodeInput.value.trim() : "";
+    let savedNotepadItem = null;
+    if (npCode) {
+      const npLoc = (document.getElementById("inpNotepadLoc") ? document.getElementById("inpNotepadLoc").value.trim() : "") || "Physical Notepad";
+      const npSummary = document.getElementById("inpNotepadSummary") ? document.getElementById("inpNotepadSummary").value.trim() : "";
+      savedNotepadItem = DSRStore.addNotepadIdToChapter(chapter.id, { code: npCode, location: npLoc, summary: npSummary });
+    }
+
+    // Bounded Upward Parent Cascade (Requirement 4.C.2)
     const parentBoostsSummary = [];
-    if (outcome.passed && Array.isArray(chapter.parents)) {
+    if (outcome.passed && !outcome.isCryoFreeze && Array.isArray(chapter.parents)) {
       chapter.parents.forEach((link) => {
         const pChapter = state.chapters.find((c) => c.id === link.parentId);
         if (pChapter) {
           const boost = DSREngine.calculateParentBoost(pChapter, chapter, link.couplingWeight, state.settings, now);
           if (boost.boosted) {
             pChapter.S = boost.newS;
-            parentBoostsSummary.push({ parentName: pChapter.name, boostDays: boost.deltaS });
           }
+          // Bounded upward shift: max 0.15 * coupling * S, capped at lastDirect + 0.35 * S
+          const coupling = Number(link.couplingWeight) || 0.45;
+          const singleShiftMs = 0.15 * coupling * (Number(pChapter.S) || 1.0) * 86400000;
+          const lastDirectTs = Number(pChapter.lastDirectReviewTimestamp) || Number(pChapter.lastReviewTimestamp) || now;
+          const maxAllowedTs = lastDirectTs + ((Number(pChapter.S) || 1.0) * 0.35 * 86400000);
+          const currentParentTs = Number(pChapter.lastReviewTimestamp) || now;
+          const shiftedTs = Math.min(maxAllowedTs, currentParentTs + singleShiftMs);
+          pChapter.lastReviewTimestamp = shiftedTs;
+
+          parentBoostsSummary.push({
+            parentName: pChapter.name,
+            boostDays: boost.deltaS,
+            shiftedDays: Math.round(((shiftedTs - currentParentTs) / 86400000) * 10) / 10
+          });
         }
       });
     } else if (!outcome.passed && blameParent && Array.isArray(chapter.parents) && chapter.parents.length > 0) {
-      // Dock parent stability / adjust lastReviewTimestamp so R_P = 0.78 (Emergency Rescue Queue)
+      // Emergency Rescue Queue without double-crushing S
       const pLink = chapter.parents[0];
       const pChapter = state.chapters.find((c) => c.id === pLink.parentId);
       if (pChapter) {
-        // Compute elapsed days needed for R = 0.78
+        pChapter.forcedUrgent = true;
         const { wd, Fd } = DSREngine.getDecayParams(pChapter.D);
         const theta = DSREngine.getTheta(pChapter, state.settings);
         const effectiveS = pChapter.S * theta;
@@ -1105,12 +1862,16 @@
     }
 
     // Online gradient descent updates for personal calibration scalars
-    state.settings.thetaLogic = outcome.newThetaLogic;
-    state.settings.thetaRote = outcome.newThetaRote;
-    state.settings.totalReviewsLogged = (state.settings.totalReviewsLogged || 0) + 1;
+    if (!outcome.isCryoFreeze) {
+      state.settings.thetaLogic = outcome.newThetaLogic;
+      state.settings.thetaRote = outcome.newThetaRote;
+      state.settings.totalReviewsLogged = (state.settings.totalReviewsLogged || 0) + 1;
+    }
 
     // Log Immutable Audit Record
-    const entryMethod = isSynthesisSession
+    const entryMethod = outcome.isCryoFreeze
+      ? "To-Do Dashboard -> 10m Cryo-Freeze Sprint"
+      : isSynthesisSession
       ? "To-Do Dashboard -> Synthesis Boss Battle"
       : isAdHocMode
       ? "Bottom-Right FAB (+) -> Ad-Hoc Review Modal"
@@ -1119,42 +1880,55 @@
     const nextDays = DSREngine.calculateNextIntervalDays(chapter, state.settings, now);
     const nextDate = new Date(now + nextDays * 86400000).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-    DSRStore.logUserAction(
-      isSynthesisSession ? "SYNTHESIS_BATTLE" : isAdHocMode ? "AD_HOC_REVIEW" : "POST_STUDY_REVIEW",
+    const logEntry = DSRStore.logUserAction(
+      outcome.isCryoFreeze ? "CRYO_FREEZE_SPRINT" : isSynthesisSession ? "SYNTHESIS_BATTLE" : isAdHocMode ? "AD_HOC_REVIEW" : "POST_STUDY_REVIEW",
       entryMethod,
       {
         chapterName: chapter.name,
+        subject: chapter.subject,
         blankPageScore: postStudyBlankPageScore,
+        rigorTier: selectedPostStudyRigorTier,
         totalProblems,
         correctProblems,
         sillySlips: postStudySillySlips,
-        conceptBlanks: outcome.M_mem,
         durationMins,
         faultLineNote: faultLineNote || "(None)",
-        parentBlameTriggered: blameParent,
-        rigorTier: outcome.rigorTier,
-        rigorLabel: outcome.rigorLabel,
-        rigorMult: outcome.rigorMult
+        isCryoFreeze: outcome.isCryoFreeze,
+        manualIntervalOverride: outcome.manualIntervalOverride || null
       },
       {
         Q: outcome.Q,
         passed: outcome.passed,
-        P_adj: outcome.P_adj,
-        P_true: outcome.P_true,
-        rigorMult: outcome.rigorMult,
+        isCryoFreeze: outcome.isCryoFreeze,
+        cryoShiftDays: outcome.cryoShiftDays,
         S_old: outcome.S_old,
         S_new: outcome.S_new,
         D_old: outcome.D_old,
         D_new: outcome.D_new,
+        P_adj: outcome.P_adj,
+        P_true: outcome.P_true,
+        rigorLabel: outcome.rigorLabel,
+        rigorMult: outcome.rigorMult,
         nextDueDays: nextDays,
         nextDueDate: nextDate,
+        manualIntervalOverride: outcome.manualIntervalOverride || null,
         parentBoosts: parentBoostsSummary.length > 0 ? parentBoostsSummary : "(None)"
       }
     );
 
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+
     DSRStore.saveState();
     closeAllModals();
-    showToast(`Session logged for ${chapter.name}: Q=${outcome.Q} (${outcome.passed ? 'Passed' : 'Lapsed'})`);
+
+    const toastMsg = outcome.isCryoFreeze
+      ? `⚡ 10m Cryo-Freeze logged for ${chapter.name}! Buffer: +${outcome.cryoShiftDays}d`
+      : `Session logged for ${chapter.name}: Q=${outcome.Q} (${outcome.passed ? 'Passed' : 'Lapsed'})`;
+
+    showToast(toastMsg, true);
+    renderDashboard();
   }
 
   // -------------------------------------------------------------
@@ -1179,141 +1953,319 @@
 
   function stopStopwatch() {
     stopwatchRunning = false;
-    document.getElementById("btnStopwatchStart").textContent = "Start";
+    const btn = document.getElementById("btnStopwatchStart");
+    if (btn) btn.textContent = "Start";
     if (stopwatchInterval) {
       clearInterval(stopwatchInterval);
       stopwatchInterval = null;
     }
-    // Auto-populate duration field
-    const mins = Math.max(1, Math.round(stopwatchSeconds / 60));
-    document.getElementById("inpDurationMins").value = mins;
-    updatePostStudyLivePreview();
   }
 
   function resetStopwatch() {
     stopStopwatch();
     stopwatchSeconds = 0;
     stopwatchPhase = 1;
-    updateStopwatchPhaseUI();
     updateStopwatchDisplay();
   }
 
   function nextStopwatchPhase() {
     stopwatchPhase = (stopwatchPhase % 3) + 1;
-    updateStopwatchPhaseUI();
-  }
-
-  function updateStopwatchPhaseUI() {
-    const phases = {
-      1: "PHASE 1: BLANK-PAGE RECALL",
-      2: "PHASE 2: 2-MIN RED-PEN AUDIT",
-      3: "PHASE 3: PROBLEM CHUNK"
-    };
-    document.getElementById("stopwatchPhaseLabel").textContent = phases[stopwatchPhase];
+    updateStopwatchDisplay();
   }
 
   function updateStopwatchDisplay() {
-    const m = Math.floor(stopwatchSeconds / 60);
-    const s = stopwatchSeconds % 60;
-    document.getElementById("stopwatchDisplay").textContent = `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    const mins = Math.floor(stopwatchSeconds / 60);
+    const secs = stopwatchSeconds % 60;
+    const str = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+    const disp = document.getElementById("stopwatchDisplay");
+    if (disp) disp.textContent = str;
+
+    const label = document.getElementById("stopwatchPhaseLabel");
+    if (label) {
+      if (stopwatchPhase === 1) label.textContent = "PHASE 1: BLANK-PAGE RECALL";
+      else if (stopwatchPhase === 2) label.textContent = "PHASE 2: RED-PEN ERROR AUDIT";
+      else label.textContent = "PHASE 3: PROBLEM CHUNK DRILL";
+    }
   }
 
   // -------------------------------------------------------------
-  // MODAL 3: MOCK TEST POST-MORTEM MATRIX CONTROLLER
+  // MODAL 6: DIVIDED CHAPTER (SUBTOPIC CHAIN) BUILDER
+  // -------------------------------------------------------------
+  function initDividedChapterModal() {
+    el.dialDividedChapter = document.getElementById("dialDividedChapter");
+    el.modalDividedChapter = document.getElementById("modalDividedChapter");
+    const btnAddSubtopic = document.getElementById("btnAddSubtopicRow");
+    const btnSave = document.getElementById("btnSaveDividedChapter");
+
+    if (el.dialDividedChapter) {
+      el.dialDividedChapter.addEventListener("click", () => {
+        openDividedChapterModal();
+      });
+    }
+
+    document.querySelectorAll("#segDividedSubject .segmented-option").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        document.querySelectorAll("#segDividedSubject .segmented-option").forEach((o) => o.classList.remove("active"));
+        opt.classList.add("active");
+        populateDividedPrereqs();
+      });
+    });
+
+    document.querySelectorAll("#segDividedWeightage .segmented-option").forEach((opt) => {
+      opt.addEventListener("click", () => {
+        document.querySelectorAll("#segDividedWeightage .segmented-option").forEach((o) => o.classList.remove("active"));
+        opt.classList.add("active");
+      });
+    });
+
+    if (btnAddSubtopic) {
+      btnAddSubtopic.addEventListener("click", () => {
+        dividedSubtopicsList.push({
+          name: "",
+          d0: 6.0,
+          status: "learned_today"
+        });
+        renderDividedSubtopicRows();
+      });
+    }
+
+    if (btnSave) {
+      btnSave.addEventListener("click", saveDividedChapter);
+    }
+  }
+
+  function openDividedChapterModal() {
+    document.getElementById("inpMacroName").value = "";
+    populateDividedPrereqs();
+    dividedSubtopicsList = [
+      { name: "Moment of Inertia & Theorems", d0: 4.5, status: "learned_today" },
+      { name: "Pure Rolling & Instantaneous Axis", d0: 6.5, status: "learned_today" },
+      { name: "Rolling with Slipping & Toppling", d0: 8.5, status: "unlock_later" }
+    ];
+    renderDividedSubtopicRows();
+    openModal(el.modalDividedChapter);
+  }
+
+  function populateDividedPrereqs() {
+    const sel = document.getElementById("selDividedPrereq");
+    if (!sel) return;
+    const activeSubject = document.querySelector("#segDividedSubject .segmented-option.active")?.getAttribute("data-value") || "Physics";
+    const state = DSRStore.getState();
+    const eligible = DSRStore.getActiveChapters(state.chapters).filter((c) => c.subject === activeSubject && !c.isSubtopic);
+
+    sel.innerHTML =
+      `<option value="">None (Standalone Macro-Chapter)</option>` +
+      eligible.map((c) => `<option value="${c.id}">${escapeHtml(c.name)} (Coupling: 40%)</option>`).join("");
+  }
+
+  function renderDividedSubtopicRows() {
+    const container = document.getElementById("dividedSubtopicsContainer");
+    if (!container) return;
+    container.innerHTML = "";
+
+    dividedSubtopicsList.forEach((sub, idx) => {
+      const k = idx + 1;
+      const card = document.createElement("div");
+      card.className = "subtopic-builder-card";
+
+      if (k > 1) {
+        const couplingBadge = document.createElement("div");
+        couplingBadge.className = "coupling-indicator-badge";
+        couplingBadge.textContent = k === 2 ? "⬇ Auto-Coupled (Direct: 45%)" : "⬇ Auto-Coupled (Direct: 45% | Transitive: 20%)";
+        container.appendChild(couplingBadge);
+      }
+
+      card.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+          <span class="mono" style="font-weight: 700; color: #C084FC;">#${k}</span>
+          <input type="text" class="form-input sub-name-input" data-idx="${idx}" placeholder="Subtopic Title" value="${escapeHtml(sub.name)}" style="flex: 1;" />
+          ${dividedSubtopicsList.length > 2 ? `<button type="button" class="secondary-btn btn-del-sub" data-idx="${idx}" style="padding: 4px 8px; color: #F87171;" title="Remove">🗑️</button>` : ''}
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 11px; color: var(--text-dim);">Difficulty (D₀):</span>
+          <span class="mono sub-d0-val" style="font-weight: 700; color: var(--cyan-core); font-size: 11px;">${sub.d0.toFixed(1)}</span>
+        </div>
+        <input type="range" class="range-input sub-d0-slider" data-idx="${idx}" min="1.0" max="10.0" step="0.5" value="${sub.d0}" />
+
+        <div style="display: flex; gap: 12px; font-size: 11px;">
+          <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+            <input type="radio" name="sub_status_${idx}" value="learned_today" ${sub.status === 'learned_today' ? 'checked' : ''} class="sub-status-radio" data-idx="${idx}" />
+            <span>Learned Today</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+            <input type="radio" name="sub_status_${idx}" value="unlock_later" ${sub.status === 'unlock_later' ? 'checked' : ''} class="sub-status-radio" data-idx="${idx}" />
+            <span style="color: var(--amber-hazard);">Unlock Later</span>
+          </label>
+        </div>
+      `;
+
+      container.appendChild(card);
+    });
+
+    container.querySelectorAll(".sub-name-input").forEach((inp) => {
+      inp.addEventListener("input", (e) => {
+        const i = Number(e.target.getAttribute("data-idx"));
+        dividedSubtopicsList[i].name = e.target.value;
+      });
+    });
+
+    container.querySelectorAll(".sub-d0-slider").forEach((slider) => {
+      slider.addEventListener("input", (e) => {
+        const i = Number(e.target.getAttribute("data-idx"));
+        const val = Number(e.target.value);
+        dividedSubtopicsList[i].d0 = val;
+        const valLabel = container.querySelectorAll(".sub-d0-val")[i];
+        if (valLabel) valLabel.textContent = val.toFixed(1);
+      });
+    });
+
+    container.querySelectorAll(".sub-status-radio").forEach((radio) => {
+      radio.addEventListener("change", (e) => {
+        const i = Number(e.target.getAttribute("data-idx"));
+        dividedSubtopicsList[i].status = e.target.value;
+      });
+    });
+
+    container.querySelectorAll(".btn-del-sub").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const i = Number(btn.getAttribute("data-idx"));
+        dividedSubtopicsList.splice(i, 1);
+        renderDividedSubtopicRows();
+      });
+    });
+  }
+
+  function saveDividedChapter() {
+    const macroName = document.getElementById("inpMacroName").value.trim();
+    if (!macroName) {
+      showToast("Please enter a Macro-Chapter Name.");
+      return;
+    }
+
+    for (let i = 0; i < dividedSubtopicsList.length; i++) {
+      if (!dividedSubtopicsList[i].name.trim()) {
+        dividedSubtopicsList[i].name = `Part ${i + 1}`;
+      }
+    }
+
+    const subject = document.querySelector("#segDividedSubject .segmented-option.active")?.getAttribute("data-value") || "Physics";
+    const weightage = Number(document.querySelector("#segDividedWeightage .segmented-option.active")?.getAttribute("data-value")) || 1.2;
+    const topology = document.querySelector('input[name="chainTopology"]:checked')?.value || "sequential";
+    const externalPrereqId = document.getElementById("selDividedPrereq").value || null;
+
+    const res = DSRStore.createDividedChapter({
+      macroName,
+      subject,
+      weightage,
+      topology,
+      externalPrereqId,
+      subtopics: dividedSubtopicsList
+    });
+
+    closeAllModals();
+    showToast(`Created Divided Chapter "${macroName}" (${res.subtopics.length} Subtopics)!`, true);
+    renderDashboard();
+  }
+
+  // -------------------------------------------------------------
+  // MODAL 3: MOCK TEST MATRIX CONTROLLER
   // -------------------------------------------------------------
   let mockTestRows = [];
 
   function initMockTestModal() {
-    document.getElementById("inpMockTestDate").value = new Date().toISOString().split("T")[0];
-    document.getElementById("btnAddMockRow").addEventListener("click", addMockTestRow);
+    document.getElementById("btnAddMockRow").addEventListener("click", () => createMockTestRow());
     document.getElementById("btnApplyMockTest").addEventListener("click", applyMockTestMatrix);
-    document.getElementById("selMockTestToughness")?.addEventListener("change", updateMockImpactPreview);
   }
 
   function openMockTestModal() {
-    mockTestRows = [];
+    document.getElementById("inpMockTestName").value = `Full Mock Test 0${Math.floor(Math.random() * 8) + 1}`;
+    document.getElementById("inpMockTestDate").value = new Date().toISOString().split("T")[0];
     document.getElementById("mockRowsContainer").innerHTML = "";
-    document.getElementById("inpMockTestName").value = "JEE Advanced Mock " + String(Math.floor(Math.random() * 90) + 10);
-    const selTough = document.getElementById("selMockTestToughness");
-    if (selTough) selTough.value = "2";
-    addMockTestRow();
+    mockTestRows = [];
+
+    const state = DSRStore.getState();
+    const activeChaps = DSRStore.getActiveChapters(state.chapters);
+    if (activeChaps.length > 0) {
+      createMockTestRow(activeChaps[0].id);
+      if (activeChaps.length > 1) createMockTestRow(activeChaps[1].id);
+    }
+
     openModal(el.modalMockTest);
   }
 
-  function addMockTestRow() {
+  function createMockTestRow(preSelectedId = null) {
     const state = DSRStore.getState();
-    const rowId = "mock_row_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+    const activeChapters = DSRStore.getActiveChapters(state.chapters);
+    const rowId = "mock_row_" + Date.now() + "_" + Math.random().toString(36).substr(2, 4);
 
     const rowEl = document.createElement("div");
-    rowEl.className = "mock-test-row";
-    rowEl.id = rowId;
-    rowEl.style.background = "var(--bg-card)";
-    rowEl.style.border = "1px solid var(--border-accent)";
-    rowEl.style.borderRadius = "var(--radius-md)";
-    rowEl.style.padding = "10px 12px";
-    rowEl.style.display = "flex";
-    rowEl.style.flexDirection = "column";
-    rowEl.style.gap = "8px";
+    rowEl.className = "preview-box";
+    rowEl.style.padding = "8px 10px";
 
-    const chapterOptions = state.chapters
-      .map((c) => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.subject)})</option>`)
-      .join("");
+    const groupsSeen = new Set();
+    let optionsHtml = "";
+
+    // Macro Groups first
+    activeChapters.forEach((c) => {
+      if (c.groupId && !groupsSeen.has(c.groupId)) {
+        groupsSeen.add(c.groupId);
+        optionsHtml += `<option value="group_${c.groupId}" ${preSelectedId === `group_${c.groupId}` ? 'selected' : ''}>[Macro Group] ${escapeHtml(c.groupTitle || "Group")} (All Subtopics)</option>`;
+      }
+    });
+
+    // Individual chapters
+    activeChapters.forEach((c) => {
+      optionsHtml += `<option value="${c.id}" ${c.id === preSelectedId ? 'selected' : ''}>${escapeHtml(c.name)} (${escapeHtml(c.subject)})</option>`;
+    });
 
     rowEl.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <select class="form-select mock-row-chapter" style="flex: 1; padding: 6px 10px; font-size: 13px;">
-          ${chapterOptions}
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <select class="form-select sel-mock-chapter" style="flex: 1; padding: 4px 8px; font-size: 11.5px;">
+          ${optionsHtml}
         </select>
-        <button class="close-btn btn-remove-mock-row" style="margin-left: 8px;">&times;</button>
+        <button class="secondary-btn btn-del-mock-row" style="padding: 2px 6px; font-size: 10px; color: #F87171; margin-left: 8px;">🗑️</button>
       </div>
       <div style="display: flex; gap: 8px; font-size: 11px;">
         <div style="flex: 1;">
-          <span style="color: var(--text-dim);">Attempted</span>
-          <input type="number" class="form-input mono mock-inp-attempted" min="1" max="20" value="3" style="padding: 6px;" />
+          <span style="color: var(--text-dim);">Att</span>
+          <input type="number" class="form-input mono inp-att" min="1" max="50" value="4" style="padding: 3px 6px;" />
         </div>
         <div style="flex: 1;">
-          <span style="color: var(--text-dim);">Correct</span>
-          <input type="number" class="form-input mono mock-inp-correct" min="0" max="20" value="2" style="padding: 6px;" />
+          <span style="color: var(--text-dim);">Corr</span>
+          <input type="number" class="form-input mono inp-corr" min="0" max="50" value="3" style="padding: 3px 6px;" />
         </div>
         <div style="flex: 1;">
-          <span style="color: var(--text-dim);">Silly Slips</span>
-          <input type="number" class="form-input mono mock-inp-silly" min="0" max="20" value="1" style="padding: 6px;" />
+          <span style="color: var(--text-dim);">Slip (M_exec)</span>
+          <input type="number" class="form-input mono inp-silly" min="0" max="50" value="1" style="padding: 3px 6px;" />
         </div>
-      </div>
-      <div style="display: flex; justify-content: space-between; font-size: 11px;">
-        <span class="mock-row-blanks mono" style="color: var(--text-muted);">Concept Lapses: <strong>0</strong></span>
-        <span class="mock-row-verdict mono" style="font-weight: 700; color: var(--cyan-core);">Partial Pass</span>
+        <div style="flex: 1;">
+          <span style="color: #F87171;">Blank (M_mem)</span>
+          <span class="mono lbl-blanks" style="display: block; font-weight: 700; color: #F87171; padding-top: 4px;">0</span>
+        </div>
       </div>
     `;
 
-    const inpAtt = rowEl.querySelector(".mock-inp-attempted");
-    const inpCorr = rowEl.querySelector(".mock-inp-correct");
-    const inpSilly = rowEl.querySelector(".mock-inp-silly");
-    const selChap = rowEl.querySelector(".mock-row-chapter");
-    const lblBlanks = rowEl.querySelector(".mock-row-blanks");
-    const lblVerdict = rowEl.querySelector(".mock-row-verdict");
-    const btnRem = rowEl.querySelector(".btn-remove-mock-row");
+    const inpAtt = rowEl.querySelector(".inp-att");
+    const inpCorr = rowEl.querySelector(".inp-corr");
+    const inpSilly = rowEl.querySelector(".inp-silly");
+    const lblBlanks = rowEl.querySelector(".lbl-blanks");
+    const btnRem = rowEl.querySelector(".btn-del-mock-row");
+    const selChap = rowEl.querySelector(".sel-mock-chapter");
 
     function updateRowCalc() {
       const att = Math.max(1, Number(inpAtt.value) || 1);
-      const corr = DSREngine.clamp(0, att, Number(inpCorr.value) || 0);
+      let corr = Number(inpCorr.value) || 0;
+      corr = DSREngine.clamp(0, att, corr);
       inpCorr.value = corr;
+
       const wrong = att - corr;
-      const silly = DSREngine.clamp(0, wrong, Number(inpSilly.value) || 0);
+      let silly = Number(inpSilly.value) || 0;
+      silly = DSREngine.clamp(0, wrong, silly);
       inpSilly.value = silly;
-      const conceptLapses = wrong - silly;
 
-      lblBlanks.innerHTML = `Concept Lapses: <strong style="color: ${conceptLapses > 0 ? '#F87171' : 'var(--emerald-retained)'};">${conceptLapses}</strong>`;
-
-      let verdict = "";
-      if (att >= 2 && conceptLapses === 0) {
-        verdict = `<span style="color: var(--emerald-retained);">🌟 Aced Under Pressure</span>`;
-      } else if (conceptLapses === 0) {
-        verdict = `<span style="color: var(--cyan-core);">✓ Partial Pass (Relief Shift)</span>`;
-      } else {
-        verdict = `<span style="color: #F87171;">⚠️ Concept Failure &rarr; Emergency Rescue</span>`;
-      }
-      lblVerdict.innerHTML = verdict;
+      const blanks = wrong - silly;
+      lblBlanks.textContent = blanks;
       updateMockImpactPreview();
     }
 
@@ -1325,18 +2277,22 @@
       updateMockImpactPreview();
     });
 
-    mockTestRows.push({ rowId, rowEl, getValues: () => {
-      const att = Math.max(1, Number(inpAtt.value) || 1);
-      const corr = DSREngine.clamp(0, att, Number(inpCorr.value) || 0);
-      const silly = DSREngine.clamp(0, att - corr, Number(inpSilly.value) || 0);
-      return {
-        chapterId: selChap.value,
-        attempted: att,
-        correct: corr,
-        sillySlips: silly,
-        conceptLapses: (att - corr) - silly
-      };
-    }});
+    mockTestRows.push({
+      rowId,
+      rowEl,
+      getValues: () => {
+        const att = Math.max(1, Number(inpAtt.value) || 1);
+        const corr = DSREngine.clamp(0, att, Number(inpCorr.value) || 0);
+        const silly = DSREngine.clamp(0, att - corr, Number(inpSilly.value) || 0);
+        return {
+          chapterId: selChap.value,
+          attempted: att,
+          correct: corr,
+          sillySlips: silly,
+          conceptLapses: att - corr - silly
+        };
+      }
+    });
 
     document.getElementById("mockRowsContainer").appendChild(rowEl);
     updateRowCalc();
@@ -1357,8 +2313,15 @@
 
     mockTestRows.forEach((r) => {
       const vals = r.getValues();
-      const ch = state.chapters.find((c) => c.id === vals.chapterId);
-      if (!ch) return;
+      let targetName = "Unknown";
+      if (vals.chapterId.startsWith("group_")) {
+        const grpId = vals.chapterId.replace("group_", "");
+        const groupChap = state.chapters.find((c) => c.groupId === grpId);
+        targetName = groupChap ? `[Group] ${groupChap.groupTitle}` : "Macro Group";
+      } else {
+        const ch = state.chapters.find((c) => c.id === vals.chapterId);
+        if (ch) targetName = ch.name;
+      }
 
       const item = document.createElement("div");
       item.style.fontSize = "11.5px";
@@ -1377,7 +2340,7 @@
       }
 
       item.innerHTML = `
-        <span>${escapeHtml(ch.name)}</span>
+        <span>${escapeHtml(targetName)}</span>
         <span class="mono">${statusMsg}</span>
       `;
       impactList.appendChild(item);
@@ -1389,6 +2352,8 @@
     const testName = document.getElementById("inpMockTestName").value.trim() || "Mock Test Matrix";
     const testDate = document.getElementById("inpMockTestDate").value;
     const now = Date.now();
+
+    DSRStore.captureUndoSnapshot(`Mock Test: ${testName}`);
 
     const selectedToughness = Number(document.getElementById("selMockTestToughness")?.value) || 2;
     const TOUGHNESS_MAP = {
@@ -1407,51 +2372,60 @@
 
     mockTestRows.forEach((r) => {
       const vals = r.getValues();
-      const chapter = state.chapters.find((c) => c.id === vals.chapterId);
-      if (!chapter) return;
+      let targets = [];
 
-      const oldS = chapter.S;
-
-      if (vals.attempted >= 2 && vals.conceptLapses === 0) {
-        // Aced under pressure scaled by Toughness
-        chapter.lastReviewTimestamp = now;
-        chapter.S = Math.round(chapter.S * tInfo.bonus * 100) / 100;
-        chapter.lastDirectS = chapter.S;
-        affectedSummaries.push({
-          chapter: chapter.name,
-          impact: `Aced Under Pressure (+${tInfo.bonusPct}% Stability Boost)`,
-          toughness: tInfo.label,
-          S_old: oldS,
-          S_new: chapter.S
-        });
-      } else if (vals.conceptLapses === 0) {
-        // Partial Pass
-        const elapsed = Math.max(0, now - chapter.lastReviewTimestamp);
-        chapter.lastReviewTimestamp = now - Math.round(elapsed * 0.70);
-        const attCount = Math.max(1, vals.attempted || 1);
-        chapter.hazardIndex = Math.round((0.7 * (chapter.hazardIndex || 0) + 0.3 * (vals.sillySlips / attCount)) * 1000) / 1000;
-        affectedSummaries.push({
-          chapter: chapter.name,
-          impact: "Partial Pass Relief Shift",
-          hazardIndex: chapter.hazardIndex
-        });
+      if (vals.chapterId.startsWith("group_")) {
+        const grpId = vals.chapterId.replace("group_", "");
+        targets = state.chapters.filter((c) => c.groupId === grpId && !c.isLocked && !c.isDropped);
       } else {
-        // Concept Failure -> Emergency Decay Interception
-        const { wd, Fd } = DSREngine.getDecayParams(chapter.D);
-        const theta = DSREngine.getTheta(chapter, state.settings);
-        const effectiveS = chapter.S * theta;
-        const targetElapsedDays = (effectiveS / Fd) * (Math.pow(0.78, -1 / wd) - 1);
-        chapter.lastReviewTimestamp = now - targetElapsedDays * 86400000;
-        chapter.lapses = (chapter.lapses || 0) + 1;
-        affectedSummaries.push({
-          chapter: chapter.name,
-          impact: "Emergency Decay Interception (R set to 0.78)",
-          lapses: chapter.lapses
-        });
+        const ch = state.chapters.find((c) => c.id === vals.chapterId);
+        if (ch) targets.push(ch);
       }
+
+      targets.forEach((chapter) => {
+        const oldS = chapter.S;
+
+        if (vals.conceptLapses >= 1) {
+          // Concept Failure -> Emergency Decay Interception without pre-crushing S
+          chapter.forcedUrgent = true;
+          const { wd, Fd } = DSREngine.getDecayParams(chapter.D);
+          const theta = DSREngine.getTheta(chapter, state.settings);
+          const effectiveS = chapter.S * theta;
+          const targetElapsedDays = (effectiveS / Fd) * (Math.pow(0.78, -1 / wd) - 1);
+          chapter.lastReviewTimestamp = now - targetElapsedDays * 86400000;
+          chapter.lapses = (chapter.lapses || 0) + 1;
+          affectedSummaries.push({
+            chapter: chapter.name,
+            impact: "Emergency Interception (R set to 0.78, forcedUrgent enabled)",
+            lapses: chapter.lapses
+          });
+        } else if (vals.attempted >= 2 && vals.conceptLapses === 0) {
+          // Aced under pressure
+          chapter.lastReviewTimestamp = now;
+          chapter.S = Math.round(chapter.S * tInfo.bonus * 100) / 100;
+          chapter.lastDirectS = chapter.S;
+          affectedSummaries.push({
+            chapter: chapter.name,
+            impact: `Aced Under Pressure (+${tInfo.bonusPct}% Stability Boost)`,
+            S_old: oldS,
+            S_new: chapter.S
+          });
+        } else {
+          // Partial Pass
+          const elapsed = Math.max(0, now - chapter.lastReviewTimestamp);
+          chapter.lastReviewTimestamp = now - Math.round(elapsed * 0.70);
+          const attCount = Math.max(1, vals.attempted || 1);
+          chapter.hazardIndex = Math.round((0.7 * (chapter.hazardIndex || 0) + 0.3 * (vals.sillySlips / attCount)) * 1000) / 1000;
+          affectedSummaries.push({
+            chapter: chapter.name,
+            impact: "Partial Pass Relief Shift",
+            hazardIndex: chapter.hazardIndex
+          });
+        }
+      });
     });
 
-    DSRStore.logUserAction(
+    const logEntry = DSRStore.logUserAction(
       "MOCK_TEST_LOG",
       "Bottom-Right FAB (+) -> Mock Test Matrix Modal",
       {
@@ -1459,36 +2433,37 @@
         testDate,
         mockToughness: selectedToughness,
         mockToughnessLabel: tInfo.label,
-        rigorTier: selectedToughness,
-        chaptersCount: mockTestRows.length,
         rows: mockTestRows.map((r) => r.getValues())
       },
       {
-        mockToughness: tInfo.label,
         affectedChapters: affectedSummaries
       }
     );
 
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+
     DSRStore.saveState();
     closeAllModals();
-    showToast(`Applied mock test back-propagation across ${affectedSummaries.length} chapters`);
+    showToast(`Applied mock test across ${affectedSummaries.length} chapters`, true);
+    renderDashboard();
   }
 
   // -------------------------------------------------------------
-  // MODAL 4: SETTINGS & CALIBRATION CONTROLLER
+  // MODAL 4: SETTINGS & SICK-DAY CLOCK SHIFT CONTROLLER
   // -------------------------------------------------------------
   function initSettingsModal() {
-    const sliderRet = document.getElementById("sliderSettingsRetention");
-    const lblRet = document.getElementById("lblSettingsRetentionVal");
-    sliderRet.addEventListener("input", () => {
-      lblRet.textContent = `${Math.round(sliderRet.value * 100)}%`;
+    const slider = document.getElementById("sliderSettingsRetention");
+    slider.addEventListener("input", (e) => {
+      document.getElementById("lblSettingsRetentionVal").textContent = `${Math.round(Number(e.target.value) * 100)}%`;
     });
 
     document.getElementById("btnSaveSettings").addEventListener("click", () => {
       const examName = document.getElementById("inpSettingsExamName").value.trim();
       const examDate = document.getElementById("inpSettingsExamDate").value;
       const prepStartDate = document.getElementById("inpSettingsStartDate").value;
-      const targetRetentionBase = Number(sliderRet.value);
+      const targetRetentionBase = Number(document.getElementById("sliderSettingsRetention").value);
       const dailyTimeBudgetMins = Number(document.getElementById("inpSettingsDailyBudget").value);
 
       DSRStore.updateSettings({
@@ -1500,96 +2475,151 @@
       });
 
       closeAllModals();
-      showToast("Calibration settings saved");
+      showToast("Calibration settings updated.", true);
+      renderDashboard();
     });
 
+    // Bidirectional Sick-Day / Syllabus Clock Shifter (Requirement 1.A)
+    const btnApplyClockShift = document.getElementById("btnApplyClockShift");
+    if (btnApplyClockShift) {
+      btnApplyClockShift.addEventListener("click", () => {
+        const inpDays = document.getElementById("inpClockShiftDays");
+        const days = Number(inpDays ? inpDays.value : 0);
+        if (!days || isNaN(days)) {
+          showToast("Please enter a valid number of days (+ to postpone, - to pull back).");
+          return;
+        }
+        const res = DSRStore.shiftSyllabusClock(days);
+        if (res.success) {
+          showToast(`Applied clock shift of ${days > 0 ? '+' : ''}${days} days across ${res.count} active chapters! (Total buffer: ${res.totalClockShiftDays}d)`, true);
+          openSettingsModal(); // Refresh modal view
+          renderDashboard();
+        } else {
+          showToast(res.message || "Failed to shift clock.");
+        }
+      });
+    }
+
+    const btnResetSicknessDays = document.getElementById("btnResetSicknessDays");
+    if (btnResetSicknessDays) {
+      btnResetSicknessDays.addEventListener("click", () => {
+        const res = DSRStore.resetSicknessClock();
+        if (res.success) {
+          showToast(`Reverted all ${res.revertedDays} sickness buffer days across ${res.count} active chapters!`, true);
+          openSettingsModal(); // Refresh modal view
+          renderDashboard();
+        } else {
+          showToast(res.message || "No sickness buffer to reset.");
+        }
+      });
+    }
+
     document.getElementById("btnResetDemoData").addEventListener("click", () => {
-      if (confirm("Reset all chapters and audit logs to factory demonstration state?")) {
+      if (confirm("Reset application to demonstration baseline state? All custom logs and chapters will be overwritten.")) {
         DSRStore.resetDemoData();
         closeAllModals();
-        showToast("Reset to factory demo state");
+        showToast("Reset to demonstration state.", true);
+        renderDashboard();
       }
     });
   }
 
   function openSettingsModal() {
-    const settings = DSRStore.getState().settings;
-    document.getElementById("inpSettingsExamName").value = settings.examName || "";
-    document.getElementById("inpSettingsExamDate").value = settings.examDate || "";
-    document.getElementById("inpSettingsStartDate").value = settings.prepStartDate || "";
-    document.getElementById("sliderSettingsRetention").value = settings.targetRetentionBase || 0.90;
-    document.getElementById("lblSettingsRetentionVal").textContent = `${Math.round((settings.targetRetentionBase || 0.90) * 100)}%`;
+    const state = DSRStore.getState();
+    const settings = state.settings;
+
+    document.getElementById("inpSettingsExamName").value = settings.examName || "JEE ADVANCED 2027";
+    document.getElementById("inpSettingsExamDate").value = settings.examDate || "2027-05-24";
+    document.getElementById("inpSettingsStartDate").value = settings.prepStartDate || "2026-01-01";
+    document.getElementById("sliderSettingsRetention").value = settings.targetRetentionBase || 0.9;
+    document.getElementById("lblSettingsRetentionVal").textContent = `${Math.round((settings.targetRetentionBase || 0.9) * 100)}%`;
     document.getElementById("inpSettingsDailyBudget").value = settings.dailyTimeBudgetMins || 90;
     document.getElementById("lblThetaLogic").textContent = Number(settings.thetaLogic || 1.0).toFixed(3);
     document.getElementById("lblThetaRote").textContent = Number(settings.thetaRote || 1.0).toFixed(3);
+
+    const totalApplied = Number(settings.totalClockShiftDays) || 0;
+    const lblTotalShift = document.getElementById("lblTotalClockShiftDays");
+    if (lblTotalShift) {
+      lblTotalShift.textContent = `${totalApplied > 0 ? '+' : ''}${totalApplied} Day${Math.abs(totalApplied) === 1 ? '' : 's'}`;
+    }
+    const inpShiftDays = document.getElementById("inpClockShiftDays");
+    if (inpShiftDays) inpShiftDays.value = "";
 
     openModal(el.modalSettings);
   }
 
   // -------------------------------------------------------------
-  // MODAL 5: CHAPTER TELEMETRY DETAIL & FAULT-LINE VAULT
+  // MODAL 5: CHAPTER DETAIL CONTROLLER
   // -------------------------------------------------------------
-  let selectedDetailChapterId = null;
-
   function openChapterDetailModal(chapterId) {
     selectedDetailChapterId = chapterId;
     const state = DSRStore.getState();
-    const chapter = state.chapters.find((c) => c.id === chapterId);
-    if (!chapter) return;
+    const ch = state.chapters.find((c) => c.id === chapterId);
+    if (!ch) return;
 
-    document.getElementById("detailChapterTitle").textContent = chapter.name;
-    const { R, elapsedDays } = DSREngine.getRetrievability(chapter, state.settings, Date.now());
-    const tier = DSREngine.getSessionTier(chapter.S);
-    const nextInterval = DSREngine.calculateNextIntervalDays(chapter, state.settings, Date.now());
+    document.getElementById("detailChapterTitle").textContent = ch.name;
+
+    const { R, elapsedDays } = DSREngine.getRetrievability(ch, state.settings, Date.now());
+    const tier = DSREngine.getSessionTier(ch.S, R, !!ch.isSubtopic);
+    const nextInterval = DSREngine.calculateNextIntervalDays(ch, state.settings, Date.now());
 
     document.getElementById("chapterTelemetryStats").innerHTML = `
       <div class="preview-row">
-        <span>Current Retrievability:</span>
-        <strong class="mono" style="color: ${R >= 0.85 ? 'var(--emerald-retained)' : '#F87171'};">${Math.round(R * 100)}% (${elapsedDays}d elapsed)</strong>
+        <span>Current Retrievability R(t):</span>
+        <strong class="mono" style="color: ${R >= 0.85 ? 'var(--emerald-retained)' : 'var(--amber-hazard)'};">${Math.round(R * 100)}% (${elapsedDays}d ago)</strong>
       </div>
       <div class="preview-row">
-        <span>Stability (S):</span>
-        <strong class="mono">${chapter.S} Days</strong>
+        <span>Memory Stability (S):</span>
+        <strong class="mono">${ch.S} Days</strong>
       </div>
       <div class="preview-row">
-        <span>Dynamic Difficulty (D / D0):</span>
-        <strong class="mono">${chapter.D} / ${chapter.D0}</strong>
+        <span>Intrinsic Difficulty (D0 / D):</span>
+        <strong class="mono">${ch.D0} / ${ch.D}</strong>
       </div>
       <div class="preview-row">
         <span>Session Tier:</span>
-        <strong>${tier.name} (${tier.durationMins}m)</strong>
+        <strong class="mono">${tier.name}</strong>
       </div>
       <div class="preview-row">
-        <span>Hazard Index (Silly Slips):</span>
-        <strong class="mono" style="color: ${chapter.hazardIndex >= 0.15 ? '#FCD34D' : 'var(--text-main)'};">${Math.round(chapter.hazardIndex * 100)}%</strong>
+        <span>Silly Error Slip Rate:</span>
+        <strong class="mono" style="color: ${ch.hazardIndex >= 0.15 ? '#F87171' : 'var(--text-main)'};">${Math.round(ch.hazardIndex * 100)}%</strong>
       </div>
       <div class="preview-row">
-        <span>Next Recommended Review:</span>
+        <span>Lapses Incurred:</span>
+        <strong class="mono" style="color: ${ch.lapses >= 3 ? '#F87171' : 'var(--text-main)'};">${ch.lapses || 0}</strong>
+      </div>
+      <div class="preview-row">
+        <span>Next Spaced Interval:</span>
         <strong class="mono">${nextInterval} Days</strong>
       </div>
     `;
 
-    // Render Fault-Lines
-    const faultList = document.getElementById("detailFaultLineList");
-    const vault = Array.isArray(chapter.faultLineVault) ? chapter.faultLineVault : [];
+    const list = document.getElementById("detailFaultLineList");
+    list.innerHTML = "";
+    const vault = Array.isArray(ch.faultLineVault) ? ch.faultLineVault : [];
     document.getElementById("detailFaultLineCount").textContent = `${vault.length} Notes`;
-    faultList.innerHTML = "";
 
     if (vault.length === 0) {
-      faultList.innerHTML = `<div style="font-size: 11px; color: var(--text-dim);">No fault-lines logged yet. Perform a session audit to record micro-concept gaps.</div>`;
+      list.innerHTML = `<span style="font-size: 11px; color: var(--text-dim); font-style: italic;">No red-pen traps logged for this topic yet.</span>`;
     } else {
       vault.forEach((fl) => {
         const item = document.createElement("div");
         item.style.background = "var(--bg-card)";
         item.style.border = "1px solid var(--border-subtle)";
         item.style.borderRadius = "var(--radius-sm)";
-        item.style.padding = "8px 10px";
-        item.style.fontSize = "12px";
+        item.style.padding = "6px 8px";
+        item.style.display = "flex";
+        item.style.justifyContent = "space-between";
+        item.style.alignItems = "center";
+        const statusBadge = fl.graduated
+          ? `<span style="color: #34D399; font-weight: 700; font-size: 10px;">🏆 Mastered</span>`
+          : `<span class="mono" style="font-size: 10px; color: var(--amber-hazard);">Missed ${fl.missCount || 1}x · Streak ${fl.cleanStreak || 0}/2</span>`;
+
         item.innerHTML = `
-          <div style="font-weight: 700; color: #7DD3FC; margin-bottom: 2px;">• ${escapeHtml(fl.note)}</div>
-          <div class="mono" style="font-size: 10px; color: var(--text-dim);">Missed ${fl.missCount || 1}x · Last: ${escapeHtml(fl.lastMissed || 'Recent')}</div>
+          <div style="font-size: 12px; font-weight: 600; color: var(--text-main);">${escapeHtml(fl.note)}</div>
+          ${statusBadge}
         `;
-        faultList.appendChild(item);
+        list.appendChild(item);
       });
     }
 
@@ -1612,26 +2642,53 @@
     el.btnHeaderSettings.addEventListener("click", openSettingsModal);
     el.topCountdownBanner.addEventListener("click", openSettingsModal);
 
-    // Budget Steppers (Smooth updates without creating audit log spam)
-    el.btnBudgetDec.addEventListener("click", () => {
-      const current = DSRStore.getState().settings.dailyTimeBudgetMins || 90;
-      const next = Math.max(15, current - 15);
-      DSRStore.setDailyTimeBudget(next);
-    });
+    // Direct Daily Time Budget Input (Requirement 1.B.1)
+    if (el.inputDailyBudget) {
+      const applyDailyBudget = () => {
+        const val = Math.max(15, Math.min(480, Number(el.inputDailyBudget.value) || 90));
+        DSRStore.setDailyTimeBudget(val);
+        el.inputDailyBudget.value = val;
+        renderDashboard();
+        showToast(`Daily budget set to ${val} mins.`);
+      };
+      el.inputDailyBudget.addEventListener("change", applyDailyBudget);
+      el.inputDailyBudget.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          el.inputDailyBudget.blur();
+        }
+      });
+    }
 
-    el.btnBudgetInc.addEventListener("click", () => {
-      const current = DSRStore.getState().settings.dailyTimeBudgetMins || 90;
-      const next = Math.min(360, current + 15);
-      DSRStore.setDailyTimeBudget(next);
-    });
+    // Low-Energy Sprint Toggle (Requirement 4 & 5.3)
+    if (el.btnSprintToggle) {
+      el.btnSprintToggle.addEventListener("click", () => {
+        isSprintModeActive = !isSprintModeActive;
+        el.btnSprintToggle.classList.toggle("active", isSprintModeActive);
+        showToast(isSprintModeActive ? "⚡ Sprint Mode Active: 10m Blank-Page recall enabled!" : "Standard Study Mode Active");
+        renderDashboard();
+      });
+    }
 
+    // Zero-Bloat Undo Button in Audit Ledger (Requirement 5.2)
+    if (el.btnUndoLastAction) {
+      el.btnUndoLastAction.addEventListener("click", () => {
+        const res = DSRStore.undoLastAction();
+        if (res.success) {
+          showToast(`Reverted: ${res.actionLabel}`);
+          renderCurrentView();
+        } else {
+          showToast(res.message || "No action to undo");
+        }
+      });
+    }
 
     const btnClearAllAudit = document.getElementById("btnClearAllAudit");
     if (btnClearAllAudit) {
       btnClearAllAudit.addEventListener("click", () => {
         if (confirm("Are you sure you want to clear all records from the audit ledger?")) {
           DSRStore.clearAllAuditLogs();
-          showToast("Cleared all audit records.");
+          showToast("Cleared all audit records.", true);
         }
       });
     }
@@ -1684,7 +2741,7 @@
       reader.onload = function (event) {
         const res = DSRStore.importStateJSON(event.target.result);
         if (res.success) {
-          showToast("Data restored successfully!");
+          showToast("Data restored successfully!", true);
         } else {
           showToast(`Restore failed: ${res.error}`);
         }
@@ -1709,9 +2766,10 @@
 
     el.dialAdHoc.addEventListener("click", () => {
       const state = DSRStore.getState();
-      const firstId = state.chapters[0] ? state.chapters[0].id : null;
+      const activeChaps = DSRStore.getActiveChapters(state.chapters);
+      const firstId = activeChaps[0] ? activeChaps[0].id : null;
       if (!firstId) {
-        showToast("No chapters available. Add a chapter first.");
+        showToast("No active chapters available. Add a chapter first.");
         return;
       }
       openPostStudyModal(firstId, true);
@@ -1741,12 +2799,13 @@
       if (selectedDetailChapterId && confirm("Permanently delete this chapter and prune its prerequisite links?")) {
         DSRStore.deleteChapter(selectedDetailChapterId);
         closeAllModals();
-        showToast("Chapter deleted.");
+        showToast("Chapter deleted.", true);
       }
     });
 
     // Sub-modal initializers
     initAddChapterModal();
+    initDividedChapterModal();
     initPostStudyModal();
     initMockTestModal();
     initSettingsModal();

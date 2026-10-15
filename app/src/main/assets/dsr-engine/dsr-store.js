@@ -1,5 +1,6 @@
 /**
  * Dynamic DSR v3.0 — Master Data Store & Telemetry Ledger
+ * Includes Master Schema Extensions, Subtopic Chain Engine, and Zero-Bloat Undo
  */
 
 const DSRStore = (function () {
@@ -13,9 +14,72 @@ const DSRStore = (function () {
     });
   }
 
+  function migrateVaultItem(item) {
+    if (!item || typeof item !== "object") return null;
+    return {
+      id: item.id || ("fl_" + Math.random().toString(36).substr(2, 9)),
+      note: item.note || "",
+      requiredStreak: [1, 2, 3].includes(Number(item.requiredStreak)) ? Number(item.requiredStreak) : 2,
+      missCount: Number(item.missCount) || 1,
+      cleanStreak: Number(item.cleanStreak) || 0,
+      graduated: !!item.graduated,
+      lastUpdated: item.lastUpdated || item.lastMissed || new Date().toISOString().split("T")[0]
+    };
+  }
+
+  function migrateNotepadItem(item) {
+    if (!item || typeof item !== "object") return null;
+    const code = (item.code || "").trim();
+    if (!code) return null;
+    return {
+      id: item.id || ("ref_" + Math.random().toString(36).substr(2, 9)),
+      code,
+      location: (item.location || "").trim() || "Physical Notepad",
+      summary: (item.summary || item.note || "").trim(),
+      createdAt: item.createdAt || new Date().toISOString().split("T")[0]
+    };
+  }
+
+  function normalizeChapter(c) {
+    if (!c || typeof c !== "object") return c;
+    const now = Date.now();
+    const lastRev = Number(c.lastReviewTimestamp) || now;
+    return {
+      id: c.id || generateUUID(),
+      name: c.name || "Untitled Chapter",
+      subject: c.subject || "Physics",
+      groupId: c.groupId || null,
+      groupTitle: c.groupTitle || null,
+      sequenceIndex: Number(c.sequenceIndex) || 1,
+      isSubtopic: !!c.isSubtopic,
+      isLocked: !!c.isLocked,
+      isDropped: !!c.isDropped,
+      D0: Number(c.D0) || 5.0,
+      D: Number(c.D) || Number(c.D0) || 5.0,
+      S: Number(c.S) || 1.0,
+      lastDirectS: Number(c.lastDirectS) || Number(c.S) || 1.0,
+      lastReviewTimestamp: lastRev,
+      lastDirectReviewTimestamp: Number(c.lastDirectReviewTimestamp) || lastRev,
+      createdAt: Number(c.createdAt) || now,
+      weightage: Number(c.weightage) || 1.0,
+      lapses: Number(c.lapses) || 0,
+      hazardIndex: Number(c.hazardIndex) || 0.0,
+      forcedUrgent: !!c.forcedUrgent,
+      parents: Array.isArray(c.parents) ? c.parents : [],
+      faultLineVault: Array.isArray(c.faultLineVault) ? c.faultLineVault.map(migrateVaultItem).filter(Boolean) : [],
+      notepadIds: Array.isArray(c.notepadIds) ? c.notepadIds.map(migrateNotepadItem).filter(Boolean) : []
+    };
+  }
+
+  function getActiveChapters(chapters) {
+    if (!Array.isArray(chapters)) return [];
+    return chapters.filter((c) => !c.isLocked && !c.isDropped);
+  }
+
   function getDemoState() {
     const now = Date.now();
     const dayMs = 86400000;
+    const rotGroupId = "grp_demo_rot_01";
 
     return {
       settings: {
@@ -26,79 +90,208 @@ const DSRStore = (function () {
         dailyTimeBudgetMins: 90,
         thetaLogic: 1.00,
         thetaRote: 1.00,
+        totalClockShiftDays: 0,
         totalReviewsLogged: 2
       },
+      lastUndoSnapshot: null,
       chapters: [
         {
           id: "chap_es_01",
           name: "Electrostatics",
           subject: "Physics",
+          groupId: null,
+          groupTitle: null,
+          sequenceIndex: 1,
+          isSubtopic: false,
+          isLocked: false,
+          isDropped: false,
           D0: 4.0,
           D: 4.0,
           S: 22.0,
           lastDirectS: 22.0,
           lastReviewTimestamp: now - 3.2 * dayMs,
+          lastDirectReviewTimestamp: now - 3.2 * dayMs,
           createdAt: now - 35 * dayMs,
           weightage: 1.6,
           lapses: 0,
           hazardIndex: 0.05,
+          forcedUrgent: false,
           parents: [],
           faultLineVault: [
-            { id: "fl_1", note: "Gauss law cylindrical boundary conditions", missCount: 1, lastMissed: "2026-10-10" }
+            {
+              id: "fl_1",
+              note: "Gauss law cylindrical boundary conditions",
+              requiredStreak: 2,
+              missCount: 1,
+              cleanStreak: 1,
+              graduated: false,
+              lastUpdated: "2026-10-10"
+            }
+          ],
+          notepadIds: [
+            {
+              id: "ref_es_01",
+              code: "PHY-ES-01",
+              location: "Notepad 2 · Page 5",
+              summary: "Gauss cylindrical surface flux derivation & symmetry constraints",
+              createdAt: "2026-10-10"
+            }
           ]
         },
         {
           id: "chap_cap_02",
           name: "Capacitance",
           subject: "Physics",
+          groupId: null,
+          groupTitle: null,
+          sequenceIndex: 1,
+          isSubtopic: false,
+          isLocked: false,
+          isDropped: false,
           D0: 4.5,
           D: 4.5,
           S: 12.0,
           lastDirectS: 12.0,
           lastReviewTimestamp: now - 2.1 * dayMs,
+          lastDirectReviewTimestamp: now - 2.1 * dayMs,
           createdAt: now - 18 * dayMs,
           weightage: 1.0,
           lapses: 0,
           hazardIndex: 0.08,
+          forcedUrgent: false,
           parents: [
             { parentId: "chap_es_01", couplingWeight: 0.45 }
           ],
           faultLineVault: [
-            { id: "fl_2", note: "Dielectric slab insertion work done formula", missCount: 2, lastMissed: "2026-10-12" }
+            {
+              id: "fl_2",
+              note: "Dielectric slab insertion work done formula",
+              requiredStreak: 2,
+              missCount: 2,
+              cleanStreak: 0,
+              graduated: false,
+              lastUpdated: "2026-10-12"
+            }
+          ],
+          notepadIds: [
+            {
+              id: "ref_cap_01",
+              code: "PHY-CAP-02",
+              location: "Notepad 2 · Page 18",
+              summary: "Dielectric slab insertion work done: battery connected vs disconnected",
+              createdAt: "2026-10-12"
+            }
           ]
         },
         {
-          id: "chap_rd_03",
-          name: "Rotational Dynamics",
+          id: "chap_rd_sub_01",
+          name: "Rotational Dynamics · Part 1: Moment of Inertia & Theorems",
           subject: "Physics",
-          D0: 6.0,
-          D: 6.2,
+          groupId: rotGroupId,
+          groupTitle: "Rotational Dynamics",
+          sequenceIndex: 1,
+          isSubtopic: true,
+          isLocked: false,
+          isDropped: false,
+          D0: 4.5,
+          D: 4.5,
+          S: 14.5,
+          lastDirectS: 14.5,
+          lastReviewTimestamp: now - 6.2 * dayMs,
+          lastDirectReviewTimestamp: now - 6.2 * dayMs,
+          createdAt: now - 28 * dayMs,
+          weightage: 1.6,
+          lapses: 0,
+          hazardIndex: 0.06,
+          forcedUrgent: false,
+          parents: [],
+          faultLineVault: [
+            {
+              id: "fl_3",
+              note: "Perpendicular axis theorem 3D planar constraint",
+              requiredStreak: 3,
+              missCount: 2,
+              cleanStreak: 1,
+              graduated: false,
+              lastUpdated: "2026-10-06"
+            }
+          ],
+          notepadIds: [
+            {
+              id: "ref_rd_01",
+              code: "ROT-01",
+              location: "Notepad 1 · Page 12",
+              summary: "Perpendicular axis theorem 2D planar lamina limitation",
+              createdAt: "2026-10-06"
+            }
+          ]
+        },
+        {
+          id: "chap_rd_sub_02",
+          name: "Rotational Dynamics · Part 2: Pure Rolling & Instantaneous Axis",
+          subject: "Physics",
+          groupId: rotGroupId,
+          groupTitle: "Rotational Dynamics",
+          sequenceIndex: 2,
+          isSubtopic: true,
+          isLocked: false,
+          isDropped: false,
+          D0: 6.5,
+          D: 6.5,
           S: 8.5,
           lastDirectS: 8.5,
-          lastReviewTimestamp: now - 8.4 * dayMs,
+          lastReviewTimestamp: now - 7.8 * dayMs,
+          lastDirectReviewTimestamp: now - 7.8 * dayMs,
           createdAt: now - 28 * dayMs,
           weightage: 1.6,
           lapses: 1,
-          hazardIndex: 0.18, // Triggers "High Trap Risk" warning banner (>= 0.15)
-          parents: [],
+          hazardIndex: 0.18,
+          forcedUrgent: false,
+          parents: [
+            { parentId: "chap_rd_sub_01", couplingWeight: 0.45 }
+          ],
           faultLineVault: [
-            { id: "fl_3", note: "Perpendicular axis theorem 3D planar constraint", missCount: 3, lastMissed: "2026-10-06" },
-            { id: "fl_4", note: "Pure rolling friction direction on inclined plane", missCount: 2, lastMissed: "2026-10-08" }
+            {
+              id: "fl_4",
+              note: "Pure rolling friction direction on inclined plane",
+              requiredStreak: 2,
+              missCount: 2,
+              cleanStreak: 0,
+              graduated: false,
+              lastUpdated: "2026-10-08"
+            }
+          ],
+          notepadIds: [
+            {
+              id: "ref_rd_02",
+              code: "ROT-02",
+              location: "Notepad 1 · Page 15",
+              summary: "Pure rolling friction sign on moving incline & instantaneous center",
+              createdAt: "2026-10-08"
+            }
           ]
         },
         {
           id: "chap_ck_04",
           name: "Chemical Kinetics",
           subject: "Chemistry",
+          groupId: null,
+          groupTitle: null,
+          sequenceIndex: 1,
+          isSubtopic: false,
+          isLocked: false,
+          isDropped: false,
           D0: 5.0,
           D: 4.8,
           S: 42.0,
           lastDirectS: 42.0,
           lastReviewTimestamp: now - 39.5 * dayMs,
+          lastDirectReviewTimestamp: now - 39.5 * dayMs,
           createdAt: now - 75 * dayMs,
           weightage: 1.0,
           lapses: 0,
           hazardIndex: 0.04,
+          forcedUrgent: false,
           parents: [],
           faultLineVault: []
         }
@@ -132,36 +325,6 @@ const DSRStore = (function () {
             nextDueDays: 21.5,
             hazardIndex: 0.05
           }
-        },
-        {
-          id: "log_seed_02",
-          timestampISO: new Date(now - 2.1 * dayMs).toISOString(),
-          displayDate: new Date(now - 2.1 * dayMs).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-          displayTime: new Date(now - 2.1 * dayMs).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-          inputType: "POST_STUDY_REVIEW",
-          entryMethod: "To-Do Dashboard Card Tap -> Post-Study Modal",
-          rawInputs: {
-            chapterName: "Capacitance",
-            blankPageScore: 3,
-            totalProblems: 15,
-            correctProblems: 13,
-            sillySlips: 1,
-            conceptBlanks: 1,
-            durationMins: 32,
-            faultLineNote: "Dielectric slab insertion work done formula"
-          },
-          computedOutputs: {
-            Q: 3.45,
-            passed: true,
-            S_old: 8.2,
-            S_new: 12.0,
-            D_old: 4.6,
-            D_new: 4.5,
-            nextDueDays: 11.8,
-            parentBoosts: [
-              { parentName: "Electrostatics", boostDays: 1.1 }
-            ]
-          }
         }
       ]
     };
@@ -178,7 +341,6 @@ const DSRStore = (function () {
         const comp = log.computedOutputs || {};
         const oldS = raw.oldSettings;
         const newS = comp.newSettings;
-        // Strip out no-op settings updates where nothing changed
         if (oldS && newS) {
           const isIdentical =
             oldS.examName === newS.examName &&
@@ -192,7 +354,6 @@ const DSRStore = (function () {
             continue;
           }
         }
-        // If consecutive identical settings updates exist, skip the duplicate
         const prev = sanitized[sanitized.length - 1];
         if (prev && prev.inputType === "EXAM_SETTINGS_UPDATE") {
           const prevStr = JSON.stringify(prev.computedOutputs);
@@ -228,14 +389,43 @@ const DSRStore = (function () {
     });
   }
 
+  function captureUndoSnapshot(actionLabel, logId = null) {
+    if (!state) return;
+    state.lastUndoSnapshot = {
+      timestamp: Date.now(),
+      actionLabel: actionLabel || "Action",
+      logId,
+      chapters: JSON.parse(JSON.stringify(state.chapters)),
+      settings: JSON.parse(JSON.stringify(state.settings))
+    };
+  }
+
+  function undoLastAction() {
+    if (!state || !state.lastUndoSnapshot) {
+      return { success: false, message: "No action available to undo." };
+    }
+    const snapshot = state.lastUndoSnapshot;
+    state.chapters = snapshot.chapters.map(normalizeChapter);
+    state.settings = snapshot.settings;
+    if (snapshot.logId) {
+      state.auditLogs = state.auditLogs.filter((l) => l.id !== snapshot.logId);
+    }
+    const label = snapshot.actionLabel || "Last action";
+    state.lastUndoSnapshot = null;
+    saveState();
+    return { success: true, actionLabel: label };
+  }
+
   function loadState() {
     try {
       const serialized = localStorage.getItem(STORAGE_KEY);
       if (serialized) {
         const parsed = JSON.parse(serialized);
         if (parsed && parsed.settings && Array.isArray(parsed.chapters)) {
-          // Clean up past spam logs from stored state
+          parsed.settings.totalClockShiftDays = Number(parsed.settings.totalClockShiftDays) || 0;
           parsed.auditLogs = sanitizeAuditLogs(parsed.auditLogs || []);
+          parsed.chapters = parsed.chapters.map(normalizeChapter);
+          parsed.lastUndoSnapshot = parsed.lastUndoSnapshot || null;
           state = parsed;
           saveState();
           return state;
@@ -281,36 +471,55 @@ const DSRStore = (function () {
   }
 
   function addChapter(chapterData, entryMethod = "Bottom-Right FAB (+) -> Add New Chapter Modal") {
+    captureUndoSnapshot(`Add Chapter: ${chapterData.name || "Untitled"}`);
     const id = generateUUID();
     const now = Date.now();
-    const initialS = DSREngine.calculateInitialStability(chapterData.D0, 4.0);
-    const newChapter = {
+    const isSubtopic = !!chapterData.isSubtopic;
+    const initialS = (typeof DSREngine !== "undefined" && DSREngine.calculateInitialStability)
+      ? DSREngine.calculateInitialStability(chapterData.D0, 4.0, isSubtopic)
+      : 3.2;
+
+    const newChapter = normalizeChapter({
       id,
       name: chapterData.name.trim(),
       subject: chapterData.subject || "Physics",
+      groupId: chapterData.groupId || null,
+      groupTitle: chapterData.groupTitle || null,
+      sequenceIndex: Number(chapterData.sequenceIndex) || 1,
+      isSubtopic,
+      isLocked: !!chapterData.isLocked,
+      isDropped: !!chapterData.isDropped,
       D0: Number(chapterData.D0) || 5.0,
       D: Number(chapterData.D0) || 5.0,
       S: initialS,
       lastDirectS: initialS,
       lastReviewTimestamp: now,
+      lastDirectReviewTimestamp: now,
       createdAt: now,
       weightage: Number(chapterData.weightage) || 1.0,
       lapses: 0,
       hazardIndex: 0.0,
       parents: Array.isArray(chapterData.parents) ? chapterData.parents : [],
       faultLineVault: []
-    };
+    });
 
     state.chapters.push(newChapter);
 
-    const nextDays = DSREngine.calculateNextIntervalDays(newChapter, state.settings, now);
+    const nextDays = (typeof DSREngine !== "undefined" && DSREngine.calculateNextIntervalDays)
+      ? DSREngine.calculateNextIntervalDays(newChapter, state.settings, now)
+      : 3.0;
+
     const nextDueDate = new Date(now + nextDays * 86400000).toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric"
     });
 
-    logUserAction(
+    const tierInfo = (typeof DSREngine !== "undefined" && DSREngine.getSessionTier)
+      ? DSREngine.getSessionTier(initialS, 1.0, isSubtopic)
+      : { name: "Tier 1" };
+
+    const logEntry = logUserAction(
       "NEW_CHAPTER",
       entryMethod,
       {
@@ -318,36 +527,260 @@ const DSRStore = (function () {
         subject: newChapter.subject,
         D0: newChapter.D0,
         weightage: newChapter.weightage,
+        isSubtopic,
+        groupId: newChapter.groupId,
         parentsCount: newChapter.parents.length
       },
       {
         initialS,
-        startingTier: DSREngine.getSessionTier(initialS).name,
+        startingTier: tierInfo.name,
         nextIntervalDays: nextDays,
         firstReviewDue: nextDueDate
       }
     );
 
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+
     saveState();
     return newChapter;
+  }
+
+  function createDividedChapter(macroData, entryMethod = "Bottom-Right FAB (+) -> Add Divided Chapter") {
+    captureUndoSnapshot(`Create Divided Chapter: ${macroData.macroName}`);
+    const groupId = "grp_" + generateUUID().slice(0, 8);
+    const now = Date.now();
+    const createdSubtopics = [];
+    const subtopicIds = [];
+
+    // Pre-generate IDs
+    macroData.subtopics.forEach(() => {
+      subtopicIds.push(generateUUID());
+    });
+
+    macroData.subtopics.forEach((sub, idx) => {
+      const k = idx + 1;
+      const subId = subtopicIds[idx];
+      const d0 = Number(sub.d0) || 5.0;
+      const initialS = (typeof DSREngine !== "undefined" && DSREngine.calculateInitialStability)
+        ? DSREngine.calculateInitialStability(d0, 4.0, true)
+        : 4.3;
+
+      // Determine parents wiring
+      const parents = [];
+      if (k === 1 && macroData.externalPrereqId) {
+        parents.push({ parentId: macroData.externalPrereqId, couplingWeight: 0.40 });
+      }
+      if (k > 1) {
+        if (macroData.topology === "hub") {
+          parents.push({ parentId: subtopicIds[0], couplingWeight: 0.50 });
+        } else {
+          // Sequential Flow: k-1 (0.45), k-2 (0.20), earlier (0.10)
+          parents.push({ parentId: subtopicIds[k - 2], couplingWeight: 0.45 });
+          if (k >= 3) {
+            parents.push({ parentId: subtopicIds[k - 3], couplingWeight: 0.20 });
+          }
+          if (k >= 4) {
+            for (let m = 0; m <= k - 4; m++) {
+              parents.push({ parentId: subtopicIds[m], couplingWeight: 0.10 });
+            }
+          }
+        }
+      }
+
+      const isLocked = sub.status === "unlock_later";
+      const chapterObj = normalizeChapter({
+        id: subId,
+        name: `${macroData.macroName} · Part ${k}: ${sub.name.trim()}`,
+        subject: macroData.subject,
+        groupId,
+        groupTitle: macroData.macroName.trim(),
+        sequenceIndex: k,
+        isSubtopic: true,
+        isLocked,
+        isDropped: false,
+        D0: d0,
+        D: d0,
+        S: initialS,
+        lastDirectS: initialS,
+        lastReviewTimestamp: now,
+        lastDirectReviewTimestamp: now,
+        createdAt: now,
+        weightage: Number(macroData.weightage) || 1.0,
+        lapses: 0,
+        hazardIndex: 0.0,
+        forcedUrgent: false,
+        parents,
+        faultLineVault: []
+      });
+
+      state.chapters.push(chapterObj);
+      createdSubtopics.push(chapterObj);
+    });
+
+    const logEntry = logUserAction(
+      "NEW_CHAPTER",
+      entryMethod,
+      {
+        macroName: macroData.macroName,
+        subject: macroData.subject,
+        subtopicsCount: macroData.subtopics.length,
+        topology: macroData.topology,
+        externalPrereqId: macroData.externalPrereqId || null
+      },
+      {
+        groupId,
+        createdSubtopics: createdSubtopics.map((s) => ({ name: s.name, locked: s.isLocked, S: s.S }))
+      }
+    );
+
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+
+    saveState();
+    return { groupId, subtopics: createdSubtopics };
+  }
+
+  function activateSubtopic(chapterId) {
+    const ch = state.chapters.find((c) => c.id === chapterId);
+    if (!ch) return null;
+    captureUndoSnapshot(`Activate Subtopic: ${ch.name}`);
+    const now = Date.now();
+    ch.isLocked = false;
+    ch.lastReviewTimestamp = now;
+    ch.lastDirectReviewTimestamp = now;
+    const initialS = (typeof DSREngine !== "undefined" && DSREngine.calculateInitialStability)
+      ? DSREngine.calculateInitialStability(ch.D0, 4.0, true)
+      : 4.3;
+    ch.S = initialS;
+    ch.lastDirectS = initialS;
+    saveState();
+    return ch;
+  }
+
+  function appendSubtopicToGroup(groupId, subtopicData) {
+    const groupChapters = state.chapters.filter((c) => c.groupId === groupId);
+    if (groupChapters.length === 0) return null;
+    captureUndoSnapshot(`Append Subtopic to ${groupChapters[0].groupTitle || "Macro Group"}`);
+
+    const nextSeq = groupChapters.reduce((max, c) => Math.max(max, c.sequenceIndex || 1), 0) + 1;
+    const lastSubtopic = groupChapters.find((c) => c.sequenceIndex === nextSeq - 1);
+    const parents = [];
+    if (lastSubtopic) {
+      parents.push({ parentId: lastSubtopic.id, couplingWeight: 0.45 });
+    }
+
+    const now = Date.now();
+    const d0 = Number(subtopicData.d0) || 5.0;
+    const initialS = (typeof DSREngine !== "undefined" && DSREngine.calculateInitialStability)
+      ? DSREngine.calculateInitialStability(d0, 4.0, true)
+      : 4.3;
+
+    const newSubtopic = normalizeChapter({
+      id: generateUUID(),
+      name: `${groupChapters[0].groupTitle} · Part ${nextSeq}: ${subtopicData.name.trim()}`,
+      subject: groupChapters[0].subject,
+      groupId,
+      groupTitle: groupChapters[0].groupTitle,
+      sequenceIndex: nextSeq,
+      isSubtopic: true,
+      isLocked: !!subtopicData.isLocked,
+      isDropped: false,
+      D0: d0,
+      D: d0,
+      S: initialS,
+      lastDirectS: initialS,
+      lastReviewTimestamp: now,
+      lastDirectReviewTimestamp: now,
+      createdAt: now,
+      weightage: groupChapters[0].weightage,
+      lapses: 0,
+      hazardIndex: 0.0,
+      forcedUrgent: false,
+      parents,
+      faultLineVault: []
+    });
+
+    state.chapters.push(newSubtopic);
+    saveState();
+    return newSubtopic;
+  }
+
+  function splitLeechChapter(chapterId, newSubtopicName, newD0) {
+    const parentCh = state.chapters.find((c) => c.id === chapterId);
+    if (!parentCh) return null;
+    captureUndoSnapshot(`Split Leech Chapter: ${parentCh.name}`);
+
+    // If parent is not part of a group, make it macro part 1
+    if (!parentCh.groupId) {
+      parentCh.groupId = "grp_" + generateUUID().slice(0, 8);
+      parentCh.groupTitle = parentCh.name;
+      parentCh.isSubtopic = true;
+      parentCh.sequenceIndex = 1;
+      parentCh.name = `${parentCh.groupTitle} · Part 1: Core Fundamentals`;
+    }
+    // Reset lapses to 1 per requirement
+    parentCh.lapses = 1;
+
+    const groupChapters = state.chapters.filter((c) => c.groupId === parentCh.groupId);
+    const nextSeq = groupChapters.reduce((max, c) => Math.max(max, c.sequenceIndex || 1), 0) + 1;
+    const now = Date.now();
+    const d0 = Number(newD0) || parentCh.D0;
+    const initialS = (typeof DSREngine !== "undefined" && DSREngine.calculateInitialStability)
+      ? DSREngine.calculateInitialStability(d0, 4.0, true)
+      : 4.3;
+
+    const childSubtopic = normalizeChapter({
+      id: generateUUID(),
+      name: `${parentCh.groupTitle} · Part ${nextSeq}: ${newSubtopicName.trim()}`,
+      subject: parentCh.subject,
+      groupId: parentCh.groupId,
+      groupTitle: parentCh.groupTitle,
+      sequenceIndex: nextSeq,
+      isSubtopic: true,
+      isLocked: false,
+      isDropped: false,
+      D0: d0,
+      D: d0,
+      S: initialS,
+      lastDirectS: initialS,
+      lastReviewTimestamp: now,
+      lastDirectReviewTimestamp: now,
+      createdAt: now,
+      weightage: parentCh.weightage,
+      lapses: 0,
+      hazardIndex: 0.0,
+      forcedUrgent: false,
+      parents: [{ parentId: parentCh.id, couplingWeight: 0.50 }],
+      faultLineVault: []
+    });
+
+    state.chapters.push(childSubtopic);
+    saveState();
+    return childSubtopic;
   }
 
   function deleteChapter(chapterId) {
     const idx = state.chapters.findIndex((c) => c.id === chapterId);
     if (idx >= 0) {
+      captureUndoSnapshot(`Delete Chapter: ${state.chapters[idx].name}`);
       const removed = state.chapters.splice(idx, 1)[0];
-      // Clean up parent references in other chapters
       state.chapters.forEach((c) => {
         if (c.parents) {
           c.parents = c.parents.filter((p) => p.parentId !== chapterId);
         }
       });
-      logUserAction(
+      const logEntry = logUserAction(
         "DELETE_CHAPTER",
         "Syllabus Browser -> Delete Action",
         { chapterId, chapterName: removed.name },
         { remainingChapters: state.chapters.length }
       );
+      if (state.lastUndoSnapshot) {
+        state.lastUndoSnapshot.logId = logEntry.id;
+      }
       saveState();
       return true;
     }
@@ -357,18 +790,121 @@ const DSRStore = (function () {
   function updateChapter(chapterId, updates) {
     const ch = state.chapters.find((c) => c.id === chapterId);
     if (!ch) return null;
+    captureUndoSnapshot(`Update Chapter: ${ch.name}`);
     Object.assign(ch, updates);
     saveState();
     return ch;
   }
 
-  // Adjust daily time budget without spamming immutable audit records
   function setDailyTimeBudget(mins) {
     const val = Math.max(15, Math.min(360, Number(mins) || 90));
     if (state.settings.dailyTimeBudgetMins !== val) {
+      captureUndoSnapshot(`Set Time Budget to ${val}m`);
       state.settings.dailyTimeBudgetMins = val;
       saveState();
     }
+  }
+
+  function shiftSyllabusClock(days, entryMethod = "Exam Settings Modal -> Bidirectional Clock Shifter") {
+    const shiftDays = Number(days);
+    if (!Number.isFinite(shiftDays) || shiftDays === 0) {
+      return { success: false, message: "Invalid days value" };
+    }
+    const shiftMs = shiftDays * 86400000;
+    const signLabel = shiftDays > 0 ? `+${shiftDays}` : `${shiftDays}`;
+    captureUndoSnapshot(`Syllabus Clock Shift (${signLabel} Days)`);
+
+    const active = getActiveChapters(state.chapters);
+    active.forEach((ch) => {
+      ch.lastReviewTimestamp = (Number(ch.lastReviewTimestamp) || Date.now()) + shiftMs;
+      ch.lastDirectReviewTimestamp = (Number(ch.lastDirectReviewTimestamp) || Number(ch.lastReviewTimestamp) || Date.now()) + shiftMs;
+    });
+
+    state.settings.totalClockShiftDays = (Number(state.settings.totalClockShiftDays) || 0) + shiftDays;
+
+    const logEntry = logUserAction(
+      "CLOCK_SHIFT",
+      entryMethod,
+      { shiftDays, totalClockShiftDays: state.settings.totalClockShiftDays, activeChaptersCount: active.length },
+      { shiftDays, totalClockShiftDays: state.settings.totalClockShiftDays, message: `Shifted syllabus clock by ${signLabel} days across ${active.length} active chapters. Total buffer: ${state.settings.totalClockShiftDays}d.` }
+    );
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+    saveState();
+    return { success: true, shiftDays, totalClockShiftDays: state.settings.totalClockShiftDays, count: active.length };
+  }
+
+  function resetSicknessClock(entryMethod = "Exam Settings Modal -> Reset Sickness Clock") {
+    const totalApplied = Number(state.settings.totalClockShiftDays) || 0;
+    if (totalApplied === 0) {
+      return { success: false, message: "No sickness buffer days to reset." };
+    }
+    const reverseShiftDays = -totalApplied;
+    const shiftMs = reverseShiftDays * 86400000;
+    captureUndoSnapshot(`Reset Sickness Days (${reverseShiftDays} Days)`);
+
+    const active = getActiveChapters(state.chapters);
+    active.forEach((ch) => {
+      ch.lastReviewTimestamp = (Number(ch.lastReviewTimestamp) || Date.now()) + shiftMs;
+      ch.lastDirectReviewTimestamp = (Number(ch.lastDirectReviewTimestamp) || Number(ch.lastReviewTimestamp) || Date.now()) + shiftMs;
+    });
+
+    state.settings.totalClockShiftDays = 0;
+
+    const logEntry = logUserAction(
+      "CLOCK_SHIFT_RESET",
+      entryMethod,
+      { revertedDays: totalApplied, activeChaptersCount: active.length },
+      { message: `Reverted all ${totalApplied} sickness buffer days back across ${active.length} active chapters.` }
+    );
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+    saveState();
+    return { success: true, revertedDays: totalApplied, count: active.length };
+  }
+
+  function addNotepadIdToChapter(chapterId, item) {
+    const ch = state.chapters.find((c) => c.id === chapterId);
+    if (!ch) return null;
+    if (!Array.isArray(ch.notepadIds)) ch.notepadIds = [];
+    const newItem = migrateNotepadItem(item);
+    if (!newItem || !newItem.code) return null;
+    captureUndoSnapshot(`Add Barcode ${newItem.code} to ${ch.name}`);
+    ch.notepadIds.push(newItem);
+    saveState();
+    return newItem;
+  }
+
+  function deleteNotepadIdFromChapter(chapterId, notepadId) {
+    const ch = state.chapters.find((c) => c.id === chapterId);
+    if (!ch || !Array.isArray(ch.notepadIds)) return false;
+    const idx = ch.notepadIds.findIndex((n) => n.id === notepadId);
+    if (idx >= 0) {
+      const removed = ch.notepadIds[idx];
+      captureUndoSnapshot(`Delete Barcode ${removed.code} from ${ch.name}`);
+      ch.notepadIds.splice(idx, 1);
+      saveState();
+      return true;
+    }
+    return false;
+  }
+
+  function updateFaultLineRequiredStreak(chapterId, faultLineId, newStreak) {
+    const ch = state.chapters.find((c) => c.id === chapterId);
+    if (!ch || !Array.isArray(ch.faultLineVault)) return false;
+    const item = ch.faultLineVault.find((t) => t.id === faultLineId);
+    if (!item) return false;
+    const val = [1, 2, 3].includes(Number(newStreak)) ? Number(newStreak) : 2;
+    item.requiredStreak = val;
+    if ((item.cleanStreak || 0) >= val) {
+      item.graduated = true;
+    } else {
+      item.graduated = false;
+    }
+    saveState();
+    return true;
   }
 
   function updateSettings(newSettings, entryMethod = "Top Countdown Banner -> Exam Settings Modal") {
@@ -382,20 +918,22 @@ const DSRStore = (function () {
       }
     }
 
-    // Guard: If nothing actually changed, exit cleanly without logging
     if (Object.keys(diffs).length === 0) {
       return false;
     }
 
+    captureUndoSnapshot("Update Exam Settings");
     Object.assign(state.settings, newSettings);
 
-    // If only daily budget was adjusted, do not treat as full exam re-calibration
     if (Object.keys(diffs).length === 1 && diffs.dailyTimeBudgetMins !== undefined) {
       saveState();
       return true;
     }
 
-    logUserAction("EXAM_SETTINGS_UPDATE", entryMethod, { changes: oldVals }, { updated: diffs });
+    const logEntry = logUserAction("EXAM_SETTINGS_UPDATE", entryMethod, { changes: oldVals }, { updated: diffs });
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
     saveState();
     return true;
   }
@@ -411,16 +949,13 @@ const DSRStore = (function () {
   }
 
   function clearAllAuditLogs() {
+    captureUndoSnapshot("Clear All Audit Records");
     state.auditLogs = [];
     saveState();
   }
 
-  function clearSettingsSpam() {
-    state.auditLogs = state.auditLogs.filter((l) => l.inputType !== "EXAM_SETTINGS_UPDATE");
-    saveState();
-  }
-
   function resetDemoData() {
+    captureUndoSnapshot("Reset Demo Data");
     state = getDemoState();
     saveState();
   }
@@ -449,18 +984,23 @@ const DSRStore = (function () {
     try {
       const parsed = JSON.parse(jsonText);
       if (parsed && parsed.settings && Array.isArray(parsed.chapters)) {
+        captureUndoSnapshot("Restore Backup");
         state = {
           settings: { ...getDemoState().settings, ...parsed.settings },
-          chapters: parsed.chapters,
+          chapters: parsed.chapters.map(normalizeChapter),
           mockTests: Array.isArray(parsed.mockTests) ? parsed.mockTests : [],
-          auditLogs: sanitizeAuditLogs(Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [])
+          auditLogs: sanitizeAuditLogs(Array.isArray(parsed.auditLogs) ? parsed.auditLogs : []),
+          lastUndoSnapshot: null
         };
-        logUserAction(
+        const logEntry = logUserAction(
           "RESTORE_BACKUP",
           "Settings Modal -> Import JSON File",
           { totalChapters: state.chapters.length, totalLogs: state.auditLogs.length },
           { restoredSuccessfully: true }
         );
+        if (state.lastUndoSnapshot) {
+          state.lastUndoSnapshot.logId = logEntry.id;
+        }
         saveState();
         return { success: true };
       }
@@ -475,15 +1015,26 @@ const DSRStore = (function () {
     loadState,
     saveState,
     subscribe,
+    captureUndoSnapshot,
+    undoLastAction,
+    getActiveChapters,
     logUserAction,
     addChapter,
+    createDividedChapter,
+    activateSubtopic,
+    appendSubtopicToGroup,
+    splitLeechChapter,
     deleteChapter,
     updateChapter,
     setDailyTimeBudget,
+    shiftSyllabusClock,
+    resetSicknessClock,
+    addNotepadIdToChapter,
+    deleteNotepadIdFromChapter,
+    updateFaultLineRequiredStreak,
     updateSettings,
     deleteAuditLog,
     clearAllAuditLogs,
-    clearSettingsSpam,
     resetDemoData,
     exportStateJSON,
     exportAuditCSV,

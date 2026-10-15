@@ -1237,6 +1237,310 @@
     .toast-popup.show {
       opacity: 1;
       transform: translateX(-50%) translateY(0);
+      pointer-events: auto;
+    }
+
+    /* Low-Energy Sprint Pill */
+    .sprint-pill-btn {
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.35);
+      color: #FCD34D;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s ease;
+      outline: none;
+    }
+    .sprint-pill-btn:hover {
+      border-color: #FBBF24;
+      background: rgba(245, 158, 11, 0.2);
+    }
+    .sprint-pill-btn.active {
+      background: #F59E0B;
+      color: #0B0F17;
+      border-color: #FBBF24;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+    }
+
+    /* Subtopic Chain Badges & Group Cards */
+    .subtopic-breadcrumb {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(139, 92, 246, 0.15);
+      color: #C084FC;
+      border: 1px solid rgba(139, 92, 246, 0.35);
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
+
+    .macro-chapter-card {
+      background: var(--bg-surface);
+      border: 1px solid rgba(139, 92, 246, 0.35);
+      border-radius: var(--radius-lg);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    }
+
+    .macro-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+
+    .macro-title {
+      font-size: 14px;
+      font-weight: 800;
+      color: #E9D5FF;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .subtopic-tree-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-left: 8px;
+      border-left: 2px solid rgba(139, 92, 246, 0.25);
+      margin-left: 4px;
+    }
+
+    .subtopic-tree-node {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      font-size: 11.5px;
+    }
+
+    .subtopic-tree-node.locked {
+      opacity: 0.65;
+      border-style: dashed;
+    }
+
+    /* Fault-Line Checklist */
+    .fl-checklist-row {
+      background: var(--bg-card);
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius-md);
+      padding: 8px 10px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .fl-checklist-row:hover {
+      border-color: var(--cyan-core);
+    }
+    .fl-checklist-row input[type="checkbox"] {
+      margin-top: 2px;
+      width: 16px;
+      height: 16px;
+      accent-color: var(--cyan-core);
+      cursor: pointer;
+    }
+
+    /* Leech and Mastered Traps Pills */
+    .leech-alert-pill {
+      background: rgba(239, 68, 68, 0.18);
+      border: 1px solid rgba(239, 68, 68, 0.5);
+      color: #FCA5A5;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 10.5px;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .leech-alert-pill:hover {
+      background: rgba(239, 68, 68, 0.28);
+    }
+
+    .mastered-traps-pill {
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34D399;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    /* Divided Chapter Modal Subtopics Builder */
+    .subtopic-builder-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+    }
+    .coupling-indicator-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-family: monospace;
+      font-weight: 700;
+      color: #C084FC;
+      background: rgba(139, 92, 246, 0.12);
+      border: 1px dashed rgba(139, 92, 246, 0.35);
+      border-radius: 4px;
+      padding: 3px 6px;
+      margin: 2px 0;
+    }
+
+    /* Notepad ID Badges, Drawers & Pills */
+    .notepad-badge-btn {
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: var(--cyan-core);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 600;
+      transition: all 0.15s ease;
+    }
+    .notepad-badge-btn:hover {
+      background: rgba(56, 189, 248, 0.22);
+      border-color: var(--cyan-core);
+    }
+    .notepad-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: #BAE6FD;
+      font-size: 11px;
+      font-family: monospace;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .notepad-pill:hover {
+      background: rgba(56, 189, 248, 0.25);
+      border-color: var(--cyan-core);
+      transform: translateY(-1px);
+    }
+    .notepad-item-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      transition: border-color 0.2s, background-color 0.2s, box-shadow 0.2s;
+    }
+    .notepad-item-card.search-match {
+      border-color: var(--cyan-core) !important;
+      background: rgba(56, 189, 248, 0.09) !important;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+    }
+
+    /* Severity Pills for Fault-Line Vault */
+    .fl-severity-opt {
+      flex: 1;
+      padding: 5px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-align: center;
+    }
+    .fl-severity-opt.active {
+      border-color: var(--cyan-core);
+      background: rgba(56, 189, 248, 0.15);
+      color: #38BDF8;
+      font-weight: 700;
+    }
+    .fl-severity-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+      border: 1px solid transparent;
+      user-select: none;
+      transition: all 0.15s ease;
+    }
+    .fl-severity-badge:hover {
+      filter: brightness(1.15);
+      transform: scale(1.04);
+    }
+    .fl-pill-minor {
+      background: rgba(16, 185, 129, 0.15);
+      color: #34D399;
+      border-color: rgba(16, 185, 129, 0.35);
+    }
+    .fl-pill-standard {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38BDF8;
+      border-color: rgba(56, 189, 248, 0.35);
+    }
+    .fl-pill-critical {
+      background: rgba(239, 68, 68, 0.18);
+      color: #F87171;
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+
+    /* Tooltip Trigger */
+    .budget-tooltip-trigger {
+      cursor: help;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.12);
+      color: var(--cyan-core);
+      font-size: 11px;
+      font-weight: bold;
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      user-select: none;
+    }
+    .budget-tooltip-trigger:hover {
+      background: rgba(56, 189, 248, 0.25);
     }
   </style>
 </head>
@@ -1304,10 +1608,14 @@
             </svg>
             <span>DAILY TIME BUDGET</span>
           </div>
-          <div class="budget-controls">
-            <span id="budgetDurationText" class="mono" style="font-weight: 700; color: var(--text-main);">0 / 90 min</span>
-            <button id="btnBudgetDec" class="budget-stepper-btn" title="Decrease Budget">-</button>
-            <button id="btnBudgetInc" class="budget-stepper-btn" title="Increase Budget">+</button>
+          <div class="budget-controls" style="display: flex; align-items: center; gap: 6px;">
+            <button id="btnSprintToggle" class="sprint-pill-btn" type="button" title="Toggle 10-Min Cryo-Freeze Sprint Mode">⚡ Sprint (10m)</button>
+            <div style="display: inline-flex; align-items: center; gap: 3px;">
+              <span id="budgetDurationText" class="mono" style="font-weight: 700; color: var(--text-main); font-size: 12px;">0 /</span>
+              <input id="inputDailyBudget" type="number" min="15" max="480" step="5" class="mono" style="width: 52px; padding: 2px 4px; font-size: 12px; font-weight: 700; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 4px; color: var(--cyan-core); text-align: center;" value="90" title="Direct daily time budget in minutes" />
+              <span style="font-size: 11px; color: var(--text-muted); font-weight: 600;">min</span>
+            </div>
+            <span class="budget-tooltip-trigger" title="Shows [Scheduled Queue Mins] / [Your Daily Limit]. Tasks auto-scale from Tier 1 (50m) -> Tier 2 (30m) -> Tier 3 (15m) as Stability grows.">?</span>
           </div>
         </div>
         <div class="budget-progress-track">
@@ -1365,6 +1673,11 @@
         <span id="syllabusCountLabel" class="mono" style="font-size: 11px; color: var(--text-dim);">4 Chapters</span>
       </div>
 
+      <!-- Global Barcode & Syllabus Search Bar -->
+      <div style="position: relative; margin-bottom: 10px;">
+        <input id="syllabusSearchInput" type="text" class="form-input" placeholder="🔍 Search by Barcode ID (e.g. ROT-03), Location, or Chapter Name..." style="padding: 9px 12px; font-size: 12px;" />
+      </div>
+
       <!-- Subject Filter Tabs -->
       <div class="audit-filter-row">
         <div class="audit-filter-pill active" data-subject-filter="ALL">All Subjects</div>
@@ -1399,6 +1712,9 @@
 
       <!-- Export / Import Action Row -->
       <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button id="btnUndoLastAction" class="secondary-btn" style="flex: 1; min-width: 110px; font-size: 11px; padding: 7px 8px; color: #F59E0B;" title="Revert last modification">
+          ↩ Undo Last Action
+        </button>
         <button id="btnExportJSON" class="secondary-btn" style="flex: 1; min-width: 90px; font-size: 11px; padding: 7px 8px;">
           ⬇ Export JSON
         </button>
@@ -1431,6 +1747,18 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+      </div>
+    </div>
+    <div id="dialDividedChapter" class="speed-dial-item">
+      <span class="speed-dial-label">Add Divided Chapter (Subtopic Chain)</span>
+      <div class="speed-dial-icon" style="background: linear-gradient(135deg, #8B5CF6, #3B82F6);">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M16 3h5v5"></path>
+          <path d="M4 20L21 3"></path>
+          <path d="M21 16v5h-5"></path>
+          <path d="M15 15l6 6"></path>
+          <path d="M4 4l5 5"></path>
         </svg>
       </div>
     </div>
@@ -1685,10 +2013,62 @@
         <input id="inpDurationMins" type="number" class="form-input mono" min="5" max="180" value="50" />
       </div>
 
-      <!-- Step 5: Fault-Line Vault Note -->
-      <div class="form-group">
-        <label class="form-label">Step 5: Fault-Line Vault Note (Micro-Concept Missed)</label>
-        <input id="inpFaultLineNote" type="text" class="form-input" placeholder="e.g. Perpendicular axis theorem 3D constraint" />
+      <!-- 🏷️ Physical Notepad Barcode / Reference IDs Registry -->
+      <div class="form-group" style="background: rgba(56, 189, 248, 0.05); border: 1px solid rgba(56, 189, 248, 0.22); border-radius: var(--radius-md); padding: 10px 12px; margin-top: 10px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <label class="form-label" style="color: var(--cyan-core); margin-bottom: 0; font-size: 11px; text-transform: uppercase; font-weight: 700;">
+            🏷️ Physical Notepad Barcode / Reference IDs
+          </label>
+          <span style="font-size: 10px; color: var(--text-dim);">Red-Pen Audit Registry</span>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
+          Existing Chapter IDs (Tap to inspect before review):
+        </div>
+        <div id="modalNotepadPillsContainer" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;">
+          <!-- Dynamically populated with clickable barcode chips -->
+        </div>
+
+        <div style="border-top: 1px dashed rgba(56, 189, 248, 0.2); padding-top: 8px;">
+          <div style="font-size: 11px; font-weight: 600; color: var(--text-main); margin-bottom: 6px;">
+            Log New Red-Pen Audit Barcode / ID (Optional):
+          </div>
+          <div style="display: flex; gap: 8px; margin-bottom: 6px;">
+            <input id="inpNotepadCode" type="text" class="form-input mono" placeholder="Barcode / ID: e.g. ROT-03" style="flex: 1; font-size: 11.5px;" />
+            <input id="inpNotepadLoc" type="text" class="form-input" placeholder="Location: e.g. NP1 P.18" style="flex: 1; font-size: 11.5px;" />
+          </div>
+          <input id="inpNotepadSummary" type="text" class="form-input" placeholder="Short convention / highlight note (e.g. Angular momentum conservation about ICOR)" style="font-size: 11.5px; margin-bottom: 6px;" />
+          <button id="btnAddNotepadIdModal" type="button" class="secondary-btn" style="font-size: 11px; padding: 5px 12px; color: var(--cyan-core); border-color: rgba(56, 189, 248, 0.4);">
+            + Add Barcode to Chapter
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 5: Fault-Line Vault (Red-Pen Audit & Graduation) -->
+      <div class="form-group" style="margin-top: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
+          <label class="form-label" style="font-size: 11px; text-transform: uppercase; color: var(--amber-hazard); margin-bottom: 0;">
+            Step 5: Fault-Line Vault (Forgotten Checklist)
+          </label>
+          <span style="font-size: 10px; color: var(--text-dim);">Check = Recalled cleanly today</span>
+        </div>
+        <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 8px;">
+          Verify previous traps during your Blank-Page test. Clean recall streak graduates the trap!
+        </p>
+        <div id="modalFaultLineChecklist" style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px;">
+          <!-- Dynamically populated -->
+        </div>
+        <label class="form-label" style="font-size: 11px; color: var(--text-muted); margin-top: 6px; margin-bottom: 4px;">
+          Add New Forgotten Formula / Concept (Optional)
+        </label>
+        <input id="inpFaultLineNote" type="text" class="form-input" placeholder="Enter forgotten formula / concept..." />
+        <div style="margin-top: 6px;">
+          <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 4px;">Required Clean Streak (Severity):</div>
+          <div class="fl-severity-selector" style="display: flex; gap: 6px;">
+            <button type="button" class="fl-severity-opt" data-severity="1">1x (Minor)</button>
+            <button type="button" class="fl-severity-opt active" data-severity="2">2x (Standard)</button>
+            <button type="button" class="fl-severity-opt" data-severity="3">3x (High)</button>
+          </div>
+        </div>
       </div>
 
       <!-- Step 6 (Conditional): Parent Foundation Blame -->
@@ -1719,6 +2099,10 @@
         <div class="preview-row">
           <span>Next Scheduled Due:</span>
           <strong id="prevNextDue" class="preview-val mono">--</strong>
+        </div>
+        <div class="preview-row" style="align-items: center; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-subtle);">
+          <span style="font-size: 11.5px; color: var(--text-muted);">Custom Next Interval Override (Days):</span>
+          <input id="inpCustomNextInterval" type="number" min="1" max="365" step="0.5" class="form-input mono" placeholder="Auto" style="width: 100px; padding: 3px 6px; font-size: 11px; text-align: right;" />
         </div>
         <div class="preview-row">
           <span>Session Tier:</span>
@@ -1845,6 +2229,32 @@
         </div>
       </div>
 
+      <!-- Sick-Day / Pause Syllabus Clock (Bidirectional) -->
+      <div class="form-group" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: var(--radius-md); padding: 12px 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <label class="form-label" style="color: #C084FC; margin-bottom: 0; font-size: 11px; text-transform: uppercase; font-weight: 700;">
+            SICK-DAY / PAUSE SYLLABUS CLOCK
+          </label>
+          <span style="font-size: 10.5px; color: var(--text-dim);">Bidirectional Shift</span>
+        </div>
+        <div style="font-size: 12px; color: var(--text-main); margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+          <span style="color: var(--text-muted);">Total Buffer Days Currently Applied:</span>
+          <strong id="lblTotalClockShiftDays" class="mono" style="color: #38BDF8; font-size: 13px;">0 Days</strong>
+        </div>
+        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px;">
+          Enter Days (+ to postpone, - to remove/pull back):
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <input id="inpClockShiftDays" type="number" step="1" class="form-input mono" placeholder="e.g., 3 or -2" style="flex: 1; padding: 7px 10px; font-size: 12px;" />
+          <button id="btnApplyClockShift" type="button" class="action-btn" style="width: auto; padding: 7px 14px; font-size: 12px; background: #8B5CF6; border-color: #7C3AED;">
+            Apply Clock Shift
+          </button>
+        </div>
+        <button id="btnResetSicknessDays" type="button" class="secondary-btn" style="width: 100%; font-size: 11px; padding: 7px 10px; color: #FCD34D; border-color: rgba(245, 158, 11, 0.35);">
+          ↺ Reset All Added Sickness Days (Revert to 0)
+        </button>
+      </div>
+
       <button id="btnSaveSettings" class="action-btn">
         Save Calibration Settings
       </button>
@@ -1892,6 +2302,91 @@
           </svg>
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- MODAL 6: ADD DIVIDED CHAPTER (SUBTOPIC CHAIN) -->
+  <div id="modalDividedChapter" class="modal-backdrop">
+    <div class="modal-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-header">
+        <span class="sheet-title">Add Divided Chapter (Subtopic Chain)</span>
+        <button class="close-btn modal-close-btn">&times;</button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Macro-Chapter Name *</label>
+        <input id="inpMacroName" type="text" class="form-input" placeholder="e.g. Rotational Dynamics" />
+      </div>
+
+      <div style="display: flex; gap: 10px;">
+        <div class="form-group" style="flex: 1;">
+          <label class="form-label">Subject</label>
+          <div id="segDividedSubject" class="segmented-control">
+            <div class="segmented-option active" data-value="Physics">Phy</div>
+            <div class="segmented-option" data-value="Chemistry">Chem</div>
+            <div class="segmented-option" data-value="Mathematics">Math</div>
+          </div>
+        </div>
+
+        <div class="form-group" style="flex: 1;">
+          <label class="form-label">Exam Weightage</label>
+          <div id="segDividedWeightage" class="segmented-control">
+            <div class="segmented-option" data-value="0.8">Low</div>
+            <div class="segmented-option active" data-value="1.2">Std</div>
+            <div class="segmented-option" data-value="1.8">High</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Chain Inheritance Topology</label>
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <label class="custom-checkbox-row" style="background: var(--bg-card); padding: 8px 10px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+            <input type="radio" name="chainTopology" value="sequential" checked />
+            <span style="font-size: 11.5px; color: var(--text-main); line-height: 1.3;">
+              <strong>Sequential Flow (1 ──► 2 ──► 3)</strong>: Later subtopics inherit all prior subtopics automatically.
+            </span>
+          </label>
+          <label class="custom-checkbox-row" style="background: var(--bg-card); padding: 8px 10px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+            <input type="radio" name="chainTopology" value="hub" />
+            <span style="font-size: 11.5px; color: var(--text-main); line-height: 1.3;">
+              <strong>Core Hub (1 ──► 2, 1 ──► 3)</strong>: Subtopic #1 serves as the shared foundation for all subtopics.
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">External Prerequisite Chapter (Optional)</label>
+        <select id="selDividedPrereq" class="form-select">
+          <option value="">None (Standalone Macro-Chapter)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <label class="form-label" style="margin-bottom: 0;">SUBTOPIC SEQUENCE BUILDER</label>
+          <span style="font-size: 10px; color: #C084FC;">Auto-Coupled Chain</span>
+        </div>
+        <div id="dividedSubtopicsContainer" style="display: flex; flex-direction: column; gap: 8px;">
+          <!-- Dynamically populated rows -->
+        </div>
+        <button id="btnAddSubtopicRow" type="button" class="secondary-btn" style="margin-top: 8px; width: 100%; padding: 8px; font-size: 11.5px; color: var(--cyan-core);">
+          + Add Next Subtopic in Flow
+        </button>
+      </div>
+
+      <button id="btnSaveDividedChapter" class="action-btn" style="background: linear-gradient(135deg, #7C3AED, #2563EB);">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M16 3h5v5"></path>
+          <path d="M4 20L21 3"></path>
+          <path d="M21 16v5h-5"></path>
+          <path d="M15 15l6 6"></path>
+          <path d="M4 4l5 5"></path>
+        </svg>
+        CREATE DIVIDED CHAPTER & AUTO-WIRE
+      </button>
     </div>
   </div>
 

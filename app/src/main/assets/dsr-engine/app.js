@@ -29,6 +29,12 @@
   // Detail modal state
   let selectedDetailChapterId = null;
 
+  // Synthesis battle partner tracking
+  let currentSynthesisPartnerId = null;
+
+  // Open notepad drawers tracking across syllabus re-renders
+  const openNotepadDrawers = new Set();
+
   // DOM Elements cache
   const el = {
     // Views
@@ -60,6 +66,9 @@
     queueListContainer: document.getElementById("queueListContainer"),
     lapsedSlotContainer: document.getElementById("lapsedSlotContainer"),
     lapsedCardContent: document.getElementById("lapsedCardContent"),
+    upcomingSectionContainer: document.getElementById("upcomingSectionContainer"),
+    upcomingSectionTitle: document.getElementById("upcomingSectionTitle"),
+    upcomingListContainer: document.getElementById("upcomingListContainer"),
     // Syllabus components
     syllabusSearchInput: document.getElementById("syllabusSearchInput"),
     syllabusCountLabel: document.getElementById("syllabusCountLabel"),
@@ -235,9 +244,7 @@
       const effWeight = ch.groupId ? (Number(ch.weightage) || 1.0) / (groupCounts[ch.groupId] || 1) : (Number(ch.weightage) || 1.0);
       const triage = DSREngine.calculatePriorityScore(ch, settings, now);
       totalEffectiveWeight += effWeight;
-      if (triage.statusCategory === "HEALTHY" || triage.R >= (triage.R_req - 0.02)) {
-        weightedHealthSum += effWeight;
-      }
+      weightedHealthSum += effWeight * triage.R;
       if (triage.statusCategory !== "HEALTHY") {
         dueTodayCount++;
       }
@@ -253,7 +260,7 @@
       el.synthesisBanner.style.display = "flex";
       el.synthesisBannerText.textContent = `Interleave [${synthesisPair.parent.name} + ${synthesisPair.child.name}] into one master problem session for a 1.25x stability boost.`;
       el.btnLaunchSynthesis.onclick = () => {
-        launchSynthesisBattle(synthesisPair.child);
+        launchSynthesisBattle(synthesisPair);
       };
     } else {
       el.synthesisBanner.style.display = "none";
@@ -265,19 +272,15 @@
       return {
         chapter: ch,
         triage,
-        tierInfo: DSREngine.getSessionTier(ch.S, triage.R, !!ch.isSubtopic)
+        tierInfo: DSREngine.getSessionTier(ch.S, triage.R, !!ch.isSubtopic, ch.tauEWMA, ch.D0)
       };
     });
 
     const lapsedList = scoredChapters.filter((sc) => sc.triage.statusCategory === "LAPSED_REBUILD");
-    let queueList = scoredChapters
-      .filter((sc) => sc.triage.statusCategory !== "LAPSED_REBUILD")
-      .sort((a, b) => b.triage.priority - a.triage.priority);
+    const dueList = scoredChapters.filter((sc) => sc.triage.statusCategory === "CRITICAL_RESCUE" || sc.triage.statusCategory === "DUE_TODAY");
+    let queueList = dueList.sort((a, b) => b.triage.priority - a.triage.priority);
 
-    // Anti-Collision Filter for Subtopics in same groupId (Requirement 4.C.3):
-    // If an earlier subtopic (#1) and a later subtopic (#2) of the same groupId are both due today:
-    // Only suppress #1 in favor of #2 if #1 has R_bio >= 0.85 AND #1.S < 1.20 * (#1.lastDirectS || #1.S)
-    // AND #1.lastReviewTimestamp < #1.lastDirectReviewTimestamp + (#1.S * 0.30 * 86400000).
+    // Anti-Collision Filter for Subtopics in same groupId (Part 3.5):
     const groupDueMap = {};
     queueList.forEach((sc) => {
       if (sc.chapter.groupId) {
@@ -289,16 +292,15 @@
     Object.keys(groupDueMap).forEach((grpId) => {
       const items = groupDueMap[grpId].sort((a, b) => (a.chapter.sequenceIndex || 1) - (b.chapter.sequenceIndex || 1));
       if (items.length >= 2) {
-        const sub1 = items[0].chapter;
-        const triage1 = items[0].triage;
-        const sCeil1 = 1.20 * (sub1.lastDirectS || sub1.S);
-        const lastDirectTs1 = Number(sub1.lastDirectReviewTimestamp) || Number(sub1.lastReviewTimestamp) || now;
-        const tsCeil1 = lastDirectTs1 + (sub1.S * 0.30 * 86400000);
-        const shouldSuppress1 = (triage1.R >= 0.85) && (sub1.S < sCeil1) && (sub1.lastReviewTimestamp < tsCeil1);
-
-        if (shouldSuppress1) {
-          queueList = queueList.filter((sc) => sc.chapter.id !== sub1.id);
-        }
+        const urgentFoundation = items.find((it) => {
+          const sub = it.chapter;
+          const sCeil = 1.20 * (sub.lastDirectS || sub.S);
+          const lastDirectTs = Number(sub.lastDirectReviewTimestamp) || Number(sub.lastReviewTimestamp) || now;
+          const tsCeil = lastDirectTs + (sub.S * 0.30 * 86400000);
+          return it.triage.R < 0.85 || sub.S >= sCeil || sub.lastReviewTimestamp >= tsCeil;
+        });
+        const keepId = urgentFoundation ? urgentFoundation.chapter.id : items[items.length - 1].chapter.id;
+        queueList = queueList.filter((sc) => sc.chapter.groupId !== grpId || sc.chapter.id === keepId);
       }
     });
 
@@ -371,6 +373,27 @@
       el.lapsedCardContent.appendChild(card);
     } else {
       el.lapsedSlotContainer.style.display = "none";
+    }
+
+    // Render Upcoming / Retained Topics in separate muted/collapsed section (Requirement Fix 2)
+    const healthyList = scoredChapters
+      .filter((sc) => sc.triage.statusCategory === "HEALTHY")
+      .sort((a, b) => a.triage.R - b.triage.R);
+
+    if (el.upcomingSectionContainer && el.upcomingListContainer) {
+      if (healthyList.length > 0) {
+        el.upcomingSectionContainer.style.display = "block";
+        if (el.upcomingSectionTitle) {
+          el.upcomingSectionTitle.textContent = `🌱 UPCOMING / RETAINED TOPICS (${healthyList.length})`;
+        }
+        el.upcomingListContainer.innerHTML = "";
+        healthyList.forEach((item) => {
+          const card = createChapterQueueCard(item);
+          el.upcomingListContainer.appendChild(card);
+        });
+      } else {
+        el.upcomingSectionContainer.style.display = "none";
+      }
     }
   }
 
@@ -532,6 +555,11 @@
         if (!drawer) return;
         const isHidden = drawer.style.display === "none";
         drawer.style.display = isHidden ? "flex" : "none";
+        if (isHidden) {
+          openNotepadDrawers.add(cid);
+        } else {
+          openNotepadDrawers.delete(cid);
+        }
       });
     });
 
@@ -648,12 +676,17 @@
           } else {
             const activeTrapsCount = Array.isArray(sub.faultLineVault) ? sub.faultLineVault.filter((t) => !t.graduated).length : 0;
             const masteredCount = Array.isArray(sub.faultLineVault) ? sub.faultLineVault.filter((t) => t.graduated).length : 0;
+            const leechSubtopicSplitBtn =
+              sub.lapses >= 3
+                ? `<button class="action-btn-sm btn-split-leech" data-id="${sub.id}" style="font-size: 10px; padding: 2px 6px; background: rgba(239, 68, 68, 0.2); color: #FCA5A5; border: 1px solid rgba(239, 68, 68, 0.4);" title="Split leech subtopic">🧬 Split</button>`
+                : "";
 
             treeHtml += `
               <div class="subtopic-tree-node">
                 <span class="mono" style="color: #A855F7;">${branchSymbol} Part ${sub.sequenceIndex || (sIdx + 1)}:</span>
                 <span style="flex: 1; font-weight: 600; color: var(--text-main); cursor: pointer;" class="btn-subtopic-detail" data-id="${sub.id}">${escapeHtml(sub.name)}</span>
                 <span class="mono" style="font-size: 11px; color: ${rPct >= 85 ? 'var(--emerald-retained)' : 'var(--amber-hazard)'};">S:${sub.S}d (R:${rPct}%)</span>
+                ${leechSubtopicSplitBtn}
                 <button type="button" class="notepad-badge-btn btn-toggle-notepad" data-id="${sub.id}" style="font-size: 10px; padding: 2px 6px;">🏷️ IDs (${subNotepadCount})</button>
                 ${activeTrapsCount > 0 ? `<span style="font-size: 10px; color: #FCD34D;" title="Active Traps">🎯 ${activeTrapsCount}</span>` : ''}
                 ${masteredCount > 0 ? `<span style="font-size: 10px; color: #34D399;" title="Mastered Traps">🏆 ${masteredCount}</span>` : ''}
@@ -694,6 +727,25 @@
             if (activated) {
               showToast(`Activated ${activated.name}! Scheduled for spaced reviews.`, true);
               renderSyllabus();
+            }
+          });
+        });
+
+        card.querySelectorAll(".btn-split-leech").forEach((splitBtn) => {
+          splitBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const sid = splitBtn.getAttribute("data-id");
+            const targetCh = state.chapters.find((c) => c.id === sid);
+            if (!targetCh) return;
+            const subtopicName = prompt(`Split Leech Subtopic "${targetCh.name}" into subtopic chain.\nEnter title for isolated subtopic problem area:`);
+            if (subtopicName && subtopicName.trim()) {
+              const newD0Str = prompt("Enter D0 for this troublesome subtopic (1.0 - 10.0):", String(targetCh.D0));
+              const newD0 = Number(newD0Str) || targetCh.D0;
+              const newSub = DSRStore.splitLeechChapter(targetCh.id, subtopicName.trim(), newD0);
+              if (newSub) {
+                showToast(`Split "${targetCh.name}"! Lapses reset to 1.`, true);
+                renderSyllabus();
+              }
             }
           });
         });
@@ -1531,6 +1583,7 @@
   function openPostStudyModal(chapterId, isAdHoc = false) {
     isAdHocMode = isAdHoc;
     isSynthesisSession = false;
+    currentSynthesisPartnerId = null;
     currentAuditingChapterId = chapterId;
 
     const state = DSRStore.getState();
@@ -1555,10 +1608,12 @@
     updatePostStudyLivePreview();
   }
 
-  function launchSynthesisBattle(chapter) {
-    openPostStudyModal(chapter.id, false);
+  function launchSynthesisBattle(synthesisPair) {
+    if (!synthesisPair || !synthesisPair.child || !synthesisPair.parent) return;
+    openPostStudyModal(synthesisPair.child.id, false);
     isSynthesisSession = true;
-    document.getElementById("postStudyModalTitle").textContent = `Synthesis Boss Battle: ${chapter.name}`;
+    currentSynthesisPartnerId = synthesisPair.parent.id;
+    document.getElementById("postStudyModalTitle").textContent = `Synthesis Battle: ${synthesisPair.parent.name} + ${synthesisPair.child.name}`;
     updatePostStudyLivePreview();
   }
 
@@ -1567,7 +1622,10 @@
     const chapter = state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return;
 
-    const tier = DSREngine.getSessionTier(chapter.S, 1.0, !!chapter.isSubtopic);
+    const tier = DSREngine.getSessionTier(chapter.S, 1.0, !!chapter.isSubtopic, chapter.tauEWMA, chapter.D0);
+
+    const chkBlame = document.getElementById("chkParentBlame");
+    if (chkBlame) chkBlame.checked = false;
 
     // Pre-fill for Sprint Mode if toggled (Requirement 4 & 5.3)
     if (isSprintModeActive) {
@@ -1755,16 +1813,40 @@
     chapter.hazardIndex = outcome.newHazardIndex;
     chapter.lapses = outcome.newLapses;
     chapter.forcedUrgent = false;
+    if (outcome.newTauEWMA) {
+      chapter.tauEWMA = outcome.newTauEWMA;
+    }
 
     if (outcome.isCryoFreeze) {
       // 10-Min Cryo-Freeze Refresher: Advance lastReviewTimestamp by buffer days, keep lastDirectReviewTimestamp intact
       const shiftMs = (outcome.cryoShiftDays || 0) * 86400000;
-      chapter.lastReviewTimestamp = Math.min(now, (Number(chapter.lastReviewTimestamp) || now) + shiftMs);
+      chapter.lastReviewTimestamp = (Number(chapter.lastReviewTimestamp) || now) + shiftMs;
     } else {
       chapter.lastReviewTimestamp = now;
       chapter.lastDirectReviewTimestamp = now;
       if (outcome.passed) {
         chapter.lastDirectS = outcome.S_new;
+      }
+    }
+
+    // If Synthesis Boss Battle, complete partner Parent chapter as well (Requirement 1)
+    let partnerChapter = null;
+    let partnerOutcome = null;
+    if (isSynthesisSession && currentSynthesisPartnerId) {
+      partnerChapter = state.chapters.find((c) => c.id === currentSynthesisPartnerId);
+      if (partnerChapter) {
+        partnerOutcome = DSREngine.evaluateStudySession(partnerChapter, inputs, state.settings, now);
+        partnerChapter.S = partnerOutcome.S_new;
+        partnerChapter.D = partnerOutcome.D_new;
+        partnerChapter.lastReviewTimestamp = now;
+        partnerChapter.lastDirectReviewTimestamp = now;
+        partnerChapter.lastDirectS = partnerOutcome.S_new;
+        partnerChapter.hazardIndex = partnerOutcome.newHazardIndex;
+        partnerChapter.lapses = partnerOutcome.newLapses;
+        partnerChapter.forcedUrgent = false;
+        if (partnerOutcome.newTauEWMA) {
+          partnerChapter.tauEWMA = partnerOutcome.newTauEWMA;
+        }
       }
     }
 
@@ -1810,20 +1892,24 @@
       }
     }
 
-    // Auto-save physical notepad barcode if entered in Modal B
+    // Auto-save physical notepad barcode if entered in Modal B (skip undo overwrite)
     const npCodeInput = document.getElementById("inpNotepadCode");
     const npCode = npCodeInput ? npCodeInput.value.trim() : "";
     let savedNotepadItem = null;
     if (npCode) {
       const npLoc = (document.getElementById("inpNotepadLoc") ? document.getElementById("inpNotepadLoc").value.trim() : "") || "Physical Notepad";
       const npSummary = document.getElementById("inpNotepadSummary") ? document.getElementById("inpNotepadSummary").value.trim() : "";
-      savedNotepadItem = DSRStore.addNotepadIdToChapter(chapter.id, { code: npCode, location: npLoc, summary: npSummary });
+      savedNotepadItem = DSRStore.addNotepadIdToChapter(chapter.id, { code: npCode, location: npLoc, summary: npSummary }, true);
     }
 
     // Bounded Upward Parent Cascade (Requirement 4.C.2)
     const parentBoostsSummary = [];
     if (outcome.passed && !outcome.isCryoFreeze && Array.isArray(chapter.parents)) {
       chapter.parents.forEach((link) => {
+        if (isSynthesisSession && link.parentId === currentSynthesisPartnerId) {
+          // Already fully updated via Synthesis Battle completion
+          return;
+        }
         const pChapter = state.chapters.find((c) => c.id === link.parentId);
         if (pChapter) {
           const boost = DSREngine.calculateParentBoost(pChapter, chapter, link.couplingWeight, state.settings, now);
@@ -1847,17 +1933,12 @@
         }
       });
     } else if (!outcome.passed && blameParent && Array.isArray(chapter.parents) && chapter.parents.length > 0) {
-      // Emergency Rescue Queue without double-crushing S
+      // Emergency Rescue Queue without corrupting lastReviewTimestamp
       const pLink = chapter.parents[0];
       const pChapter = state.chapters.find((c) => c.id === pLink.parentId);
       if (pChapter) {
         pChapter.forcedUrgent = true;
-        const { wd, Fd } = DSREngine.getDecayParams(pChapter.D);
-        const theta = DSREngine.getTheta(pChapter, state.settings);
-        const effectiveS = pChapter.S * theta;
-        const targetElapsedDays = (effectiveS / Fd) * (Math.pow(0.78, -1 / wd) - 1);
-        pChapter.lastReviewTimestamp = now - targetElapsedDays * 86400000;
-        parentBoostsSummary.push({ parentName: pChapter.name, emergencyInterception: "Pulled to Critical Rescue (R = 0.78)" });
+        parentBoostsSummary.push({ parentName: pChapter.name, emergencyInterception: "Flagged Urgent for Priority Queue Rescue" });
       }
     }
 
@@ -2560,7 +2641,7 @@
     document.getElementById("detailChapterTitle").textContent = ch.name;
 
     const { R, elapsedDays } = DSREngine.getRetrievability(ch, state.settings, Date.now());
-    const tier = DSREngine.getSessionTier(ch.S, R, !!ch.isSubtopic);
+    const tier = DSREngine.getSessionTier(ch.S, R, !!ch.isSubtopic, ch.tauEWMA, ch.D0);
     const nextInterval = DSREngine.calculateNextIntervalDays(ch, state.settings, Date.now());
 
     document.getElementById("chapterTelemetryStats").innerHTML = `
@@ -2577,8 +2658,12 @@
         <strong class="mono">${ch.D0} / ${ch.D}</strong>
       </div>
       <div class="preview-row">
+        <span>Predicted Pacing (EWMA):</span>
+        <strong class="mono">${ch.tauEWMA ? (Math.round(ch.tauEWMA * 10) / 10) + ' min/prob' : '2.0 min/prob'} (base: ${ch.tauBaseline || '2.0'}m)</strong>
+      </div>
+      <div class="preview-row">
         <span>Session Tier:</span>
-        <strong class="mono">${tier.name}</strong>
+        <strong class="mono">${tier.name} (${tier.durationMins}m)</strong>
       </div>
       <div class="preview-row">
         <span>Silly Error Slip Rate:</span>
@@ -2713,11 +2798,21 @@
       });
     });
 
+    // Syllabus Search (Fix 1)
+    if (el.syllabusSearchInput) {
+      el.syllabusSearchInput.addEventListener("input", (e) => {
+        syllabusSearchQuery = e.target.value;
+        renderSyllabus();
+      });
+    }
+
     // Audit Search
-    el.auditSearchInput.addEventListener("input", (e) => {
-      auditSearchQuery = e.target.value;
-      renderAuditLedger();
-    });
+    if (el.auditSearchInput) {
+      el.auditSearchInput.addEventListener("input", (e) => {
+        auditSearchQuery = e.target.value;
+        renderAuditLedger();
+      });
+    }
 
     // Audit Exports / Imports
     el.btnExportJSON.addEventListener("click", () => {

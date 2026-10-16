@@ -14,6 +14,10 @@ const DSRStore = (function () {
     });
   }
 
+  function clamp(min, max, val) {
+    return Math.min(Math.max(val, min), max);
+  }
+
   function migrateVaultItem(item) {
     if (!item || typeof item !== "object") return null;
     return {
@@ -44,6 +48,10 @@ const DSRStore = (function () {
     if (!c || typeof c !== "object") return c;
     const now = Date.now();
     const lastRev = Number(c.lastReviewTimestamp) || now;
+    const defaultTau = (Number(c.D0) || 5.0) <= 6.0 ? 2.0 : 1.2;
+    const tauBase = clamp(0.4, 10.0, Number(c.tauBaseline) || Number(c.tauEWMA) || defaultTau);
+    const tauEwma = clamp(0.4, 10.0, Number(c.tauEWMA) || tauBase);
+
     return {
       id: c.id || generateUUID(),
       name: c.name || "Untitled Chapter",
@@ -65,6 +73,8 @@ const DSRStore = (function () {
       lapses: Number(c.lapses) || 0,
       hazardIndex: Number(c.hazardIndex) || 0.0,
       forcedUrgent: !!c.forcedUrgent,
+      tauBaseline: tauBase,
+      tauEWMA: tauEwma,
       parents: Array.isArray(c.parents) ? c.parents : [],
       faultLineVault: Array.isArray(c.faultLineVault) ? c.faultLineVault.map(migrateVaultItem).filter(Boolean) : [],
       notepadIds: Array.isArray(c.notepadIds) ? c.notepadIds.map(migrateNotepadItem).filter(Boolean) : []
@@ -116,6 +126,8 @@ const DSRStore = (function () {
           lapses: 0,
           hazardIndex: 0.05,
           forcedUrgent: false,
+          tauBaseline: 2.0,
+          tauEWMA: 2.0,
           parents: [],
           faultLineVault: [
             {
@@ -159,6 +171,8 @@ const DSRStore = (function () {
           lapses: 0,
           hazardIndex: 0.08,
           forcedUrgent: false,
+          tauBaseline: 2.0,
+          tauEWMA: 2.0,
           parents: [
             { parentId: "chap_es_01", couplingWeight: 0.45 }
           ],
@@ -204,6 +218,8 @@ const DSRStore = (function () {
           lapses: 0,
           hazardIndex: 0.06,
           forcedUrgent: false,
+          tauBaseline: 2.0,
+          tauEWMA: 2.0,
           parents: [],
           faultLineVault: [
             {
@@ -247,6 +263,8 @@ const DSRStore = (function () {
           lapses: 1,
           hazardIndex: 0.18,
           forcedUrgent: false,
+          tauBaseline: 2.0,
+          tauEWMA: 2.0,
           parents: [
             { parentId: "chap_rd_sub_01", couplingWeight: 0.45 }
           ],
@@ -292,6 +310,8 @@ const DSRStore = (function () {
           lapses: 0,
           hazardIndex: 0.04,
           forcedUrgent: false,
+          tauBaseline: 1.2,
+          tauEWMA: 1.2,
           parents: [],
           faultLineVault: []
         }
@@ -479,6 +499,10 @@ const DSRStore = (function () {
       ? DSREngine.calculateInitialStability(chapterData.D0, 4.0, isSubtopic)
       : 3.2;
 
+    const d0Val = Number(chapterData.D0) || 5.0;
+    const defaultTau = d0Val <= 6.0 ? 2.0 : 1.2;
+    const tau = Number(chapterData.tauBaseline) || Number(chapterData.tauEWMA) || Number(chapterData.predictedMinsPerProblem) || defaultTau;
+
     const newChapter = normalizeChapter({
       id,
       name: chapterData.name.trim(),
@@ -489,8 +513,8 @@ const DSRStore = (function () {
       isSubtopic,
       isLocked: !!chapterData.isLocked,
       isDropped: !!chapterData.isDropped,
-      D0: Number(chapterData.D0) || 5.0,
-      D: Number(chapterData.D0) || 5.0,
+      D0: d0Val,
+      D: d0Val,
       S: initialS,
       lastDirectS: initialS,
       lastReviewTimestamp: now,
@@ -499,6 +523,9 @@ const DSRStore = (function () {
       weightage: Number(chapterData.weightage) || 1.0,
       lapses: 0,
       hazardIndex: 0.0,
+      forcedUrgent: false,
+      tauBaseline: tau,
+      tauEWMA: tau,
       parents: Array.isArray(chapterData.parents) ? chapterData.parents : [],
       faultLineVault: []
     });
@@ -516,8 +543,8 @@ const DSRStore = (function () {
     });
 
     const tierInfo = (typeof DSREngine !== "undefined" && DSREngine.getSessionTier)
-      ? DSREngine.getSessionTier(initialS, 1.0, isSubtopic)
-      : { name: "Tier 1" };
+      ? DSREngine.getSessionTier(initialS, 1.0, isSubtopic, newChapter.tauEWMA, newChapter.D0)
+      : { name: "Tier 1", durationMins: 50 };
 
     const logEntry = logUserAction(
       "NEW_CHAPTER",
@@ -590,6 +617,7 @@ const DSRStore = (function () {
       }
 
       const isLocked = sub.status === "unlock_later";
+      const subTau = Number(sub.tau) || 2.0;
       const chapterObj = normalizeChapter({
         id: subId,
         name: `${macroData.macroName} · Part ${k}: ${sub.name.trim()}`,
@@ -611,6 +639,8 @@ const DSRStore = (function () {
         lapses: 0,
         hazardIndex: 0.0,
         forcedUrgent: false,
+        tauBaseline: subTau,
+        tauEWMA: subTau,
         parents,
         faultLineVault: []
       });
@@ -620,7 +650,7 @@ const DSRStore = (function () {
     });
 
     const logEntry = logUserAction(
-      "NEW_CHAPTER",
+      "DIVIDED_CHAPTER_CREATED",
       entryMethod,
       {
         macroName: macroData.macroName,
@@ -656,6 +686,17 @@ const DSRStore = (function () {
       : 4.3;
     ch.S = initialS;
     ch.lastDirectS = initialS;
+
+    const logEntry = logUserAction(
+      "SUBTOPIC_ACTIVATED",
+      "Syllabus Browser -> Activate Subtopic",
+      { name: ch.name, groupTitle: ch.groupTitle },
+      { initialS: ch.S }
+    );
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+
     saveState();
     return ch;
   }
@@ -666,11 +707,17 @@ const DSRStore = (function () {
     captureUndoSnapshot(`Append Subtopic to ${groupChapters[0].groupTitle || "Macro Group"}`);
 
     const nextSeq = groupChapters.reduce((max, c) => Math.max(max, c.sequenceIndex || 1), 0) + 1;
-    const lastSubtopic = groupChapters.find((c) => c.sequenceIndex === nextSeq - 1);
+    const sortedGroup = groupChapters.slice().sort((a, b) => (a.sequenceIndex || 1) - (b.sequenceIndex || 1));
     const parents = [];
-    if (lastSubtopic) {
-      parents.push({ parentId: lastSubtopic.id, couplingWeight: 0.45 });
-    }
+    const prev1 = sortedGroup.find((c) => c.sequenceIndex === nextSeq - 1);
+    const prev2 = sortedGroup.find((c) => c.sequenceIndex === nextSeq - 2);
+    if (prev1) parents.push({ parentId: prev1.id, couplingWeight: 0.45 });
+    if (prev2) parents.push({ parentId: prev2.id, couplingWeight: 0.20 });
+    sortedGroup.forEach((c) => {
+      if (c.sequenceIndex < nextSeq - 2) {
+        parents.push({ parentId: c.id, couplingWeight: 0.10 });
+      }
+    });
 
     const now = Date.now();
     const d0 = Number(subtopicData.d0) || 5.0;
@@ -678,6 +725,7 @@ const DSRStore = (function () {
       ? DSREngine.calculateInitialStability(d0, 4.0, true)
       : 4.3;
 
+    const subTau = Number(subtopicData.tau) || 2.0;
     const newSubtopic = normalizeChapter({
       id: generateUUID(),
       name: `${groupChapters[0].groupTitle} · Part ${nextSeq}: ${subtopicData.name.trim()}`,
@@ -699,11 +747,24 @@ const DSRStore = (function () {
       lapses: 0,
       hazardIndex: 0.0,
       forcedUrgent: false,
+      tauBaseline: subTau,
+      tauEWMA: subTau,
       parents,
       faultLineVault: []
     });
 
     state.chapters.push(newSubtopic);
+
+    const logEntry = logUserAction(
+      "SUBTOPIC_APPENDED",
+      "Syllabus Browser -> Append Subtopic",
+      { name: newSubtopic.name, groupTitle: newSubtopic.groupTitle, sequenceIndex: nextSeq },
+      { initialS: newSubtopic.S }
+    );
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+
     saveState();
     return newSubtopic;
   }
@@ -732,6 +793,7 @@ const DSRStore = (function () {
       ? DSREngine.calculateInitialStability(d0, 4.0, true)
       : 4.3;
 
+    const subTau = Number(parentCh.tauEWMA) || 2.0;
     const childSubtopic = normalizeChapter({
       id: generateUUID(),
       name: `${parentCh.groupTitle} · Part ${nextSeq}: ${newSubtopicName.trim()}`,
@@ -753,11 +815,24 @@ const DSRStore = (function () {
       lapses: 0,
       hazardIndex: 0.0,
       forcedUrgent: false,
+      tauBaseline: subTau,
+      tauEWMA: subTau,
       parents: [{ parentId: parentCh.id, couplingWeight: 0.50 }],
       faultLineVault: []
     });
 
     state.chapters.push(childSubtopic);
+
+    const logEntry = logUserAction(
+      "SUBTOPIC_APPENDED",
+      "Syllabus Browser -> Leech Split",
+      { name: childSubtopic.name, groupTitle: parentCh.groupTitle, sequenceIndex: nextSeq },
+      { initialS: childSubtopic.S }
+    );
+    if (state.lastUndoSnapshot) {
+      state.lastUndoSnapshot.logId = logEntry.id;
+    }
+
     saveState();
     return childSubtopic;
   }
@@ -865,14 +940,25 @@ const DSRStore = (function () {
     return { success: true, revertedDays: totalApplied, count: active.length };
   }
 
-  function addNotepadIdToChapter(chapterId, item) {
+  function addNotepadIdToChapter(chapterId, item, skipUndoSnapshot = false) {
     const ch = state.chapters.find((c) => c.id === chapterId);
     if (!ch) return null;
     if (!Array.isArray(ch.notepadIds)) ch.notepadIds = [];
     const newItem = migrateNotepadItem(item);
     if (!newItem || !newItem.code) return null;
-    captureUndoSnapshot(`Add Barcode ${newItem.code} to ${ch.name}`);
+    if (!skipUndoSnapshot) {
+      captureUndoSnapshot(`Add Barcode ${newItem.code} to ${ch.name}`);
+    }
     ch.notepadIds.push(newItem);
+    if (!skipUndoSnapshot) {
+      const logEntry = logUserAction(
+        "NOTEPAD_BARCODE_ADDED",
+        "Notepad Barcode Registry",
+        { chapterName: ch.name, code: newItem.code, location: newItem.location, summary: newItem.summary },
+        { totalIds: ch.notepadIds.length }
+      );
+      if (state.lastUndoSnapshot) state.lastUndoSnapshot.logId = logEntry.id;
+    }
     saveState();
     return newItem;
   }

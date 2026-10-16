@@ -57,47 +57,61 @@ const DSREngine = (function () {
     // Horizon Compression if interval exceeds exam date
     const examMs = new Date(settings.examDate).getTime();
     const daysToExam = (examMs - nowMs) / (1000 * 60 * 60 * 24);
-    if (daysToExam > 2 && rawInterval > daysToExam) {
-      rawInterval = Math.max(1, daysToExam * 0.78);
+    if (daysToExam > 0 && rawInterval > daysToExam * 0.85) {
+      rawInterval = Math.max(0.5, daysToExam * 0.78);
     }
     return Math.max(1, Math.round(rawInterval * 10) / 10);
   }
 
-  // 6. Adaptive Session Tier & Prescribed Protocol (Subtopic Aware)
-  function getSessionTier(S, R = 1.0, isSubtopic = false) {
+  // 6. Adaptive Session Tier & Prescribed Protocol (Subtopic Aware with 0.6 / 0.4 EWMA Time Engine)
+  function getSessionTier(S, R = 1.0, isSubtopic = false, tauEWMA = null, D0 = 5.0) {
     const valS = Number(S) || 1.0;
     const valR = (Number(R) !== undefined && !isNaN(Number(R))) ? Number(R) : 1.0;
     const t1Limit = isSubtopic ? 10 : 14;
     const t2Limit = isSubtopic ? 28 : 40;
 
+    let tier = 1;
+    let name = "";
+    let taskSummary = "";
+    let recommendedProblems = 0;
+    let blankPageMins = 0;
+
     if (valS < t1Limit || valR < 0.72) {
-      return {
-        tier: 1,
-        name: isSubtopic ? "Tier 1 · Subtopic Rebuild" : "Tier 1 · Full Rebuild",
-        durationMins: isSubtopic ? 30 : 50,
-        taskSummary: isSubtopic ? "6m Blank-Page + 1m Audit + 12 Core Problems" : "10m Blank-Page + 2m Audit + 20 Core Problems",
-        recommendedProblems: isSubtopic ? 12 : 20,
-        blankPageMins: isSubtopic ? 6 : 10
-      };
+      tier = 1;
+      name = isSubtopic ? "Tier 1 · Subtopic Rebuild" : "Tier 1 · Full Rebuild";
+      recommendedProblems = isSubtopic ? 12 : 20;
+      blankPageMins = isSubtopic ? 6 : 10;
+      taskSummary = isSubtopic ? "6m Blank-Page + 1m Audit + 12 Core Problems" : "10m Blank-Page + 2m Audit + 20 Core Problems";
     } else if (valS < t2Limit || valR < 0.82) {
-      return {
-        tier: 2,
-        name: isSubtopic ? "Tier 2 · Subtopic Drill" : "Tier 2 · Focused Drill",
-        durationMins: isSubtopic ? 20 : 30,
-        taskSummary: isSubtopic ? "4m Fault-Line Map + 1m Audit + 8 Hard Problems" : "6m Fault-Line Map + 1m Audit + 10 Hard Problems",
-        recommendedProblems: isSubtopic ? 8 : 10,
-        blankPageMins: isSubtopic ? 4 : 6
-      };
+      tier = 2;
+      name = isSubtopic ? "Tier 2 · Subtopic Drill" : "Tier 2 · Focused Drill";
+      recommendedProblems = isSubtopic ? 8 : 10;
+      blankPageMins = isSubtopic ? 4 : 6;
+      taskSummary = isSubtopic ? "4m Fault-Line Map + 1m Audit + 8 Hard Problems" : "6m Fault-Line Map + 1m Audit + 10 Hard Problems";
     } else {
-      return {
-        tier: 3,
-        name: isSubtopic ? "Tier 3 · Subtopic Audit" : "Tier 3 · Lightning Audit",
-        durationMins: isSubtopic ? 10 : 15,
-        taskSummary: isSubtopic ? "2m Formula Sprint + 4 Elite Multi-Concept Problems" : "4m Formula Sprint + 5 Elite Multi-Concept Problems",
-        recommendedProblems: isSubtopic ? 4 : 5,
-        blankPageMins: isSubtopic ? 2 : 4
-      };
+      tier = 3;
+      name = isSubtopic ? "Tier 3 · Subtopic Audit" : "Tier 3 · Lightning Audit";
+      recommendedProblems = isSubtopic ? 4 : 5;
+      blankPageMins = isSubtopic ? 2 : 4;
+      taskSummary = isSubtopic ? "2m Formula Sprint + 4 Elite Multi-Concept Problems" : "4m Formula Sprint + 5 Elite Multi-Concept Problems";
     }
+
+    const d0Val = Number(D0) || 5.0;
+    const defaultTau = d0Val <= 6.0 ? 2.0 : 1.2;
+    const effectiveTau = clamp(0.4, 10.0, Number(tauEWMA) || defaultTau);
+    const auditMins = tier === 3 ? 0 : (isSubtopic ? 1 : (tier === 1 ? 2 : 1));
+    const predictedMins = Math.round(blankPageMins + auditMins + (recommendedProblems * effectiveTau));
+    const durationMins = clamp(isSubtopic ? 6 : 10, 120, predictedMins);
+
+    return {
+      tier,
+      name,
+      durationMins,
+      effectiveTau: Math.round(effectiveTau * 100) / 100,
+      taskSummary,
+      recommendedProblems,
+      blankPageMins
+    };
   }
 
   // 7. Day-0 New Chapter Initialization (with 1.35x Subtopic multiplier)
@@ -116,16 +130,39 @@ const DSREngine = (function () {
   function calculatePriorityScore(chapter, settings, nowMs = Date.now()) {
     const { R, elapsedDays } = getRetrievability(chapter, settings, nowMs);
     const R_req = getEffectiveTargetRetention(settings, nowMs);
-    const overdueRatio = (1 - R) / Math.max(0.01, 1 - R_req);
-    const excessDecay = Math.max(0, R_req - R - 0.12);
+
+    if (chapter.forcedUrgent) {
+      return {
+        priority: 99.0,
+        R: Math.min(R, 0.78),
+        R_req,
+        statusCategory: "CRITICAL_RESCUE",
+        elapsedDays: Math.round(elapsedDays * 10) / 10
+      };
+    }
+
+    // Apply Horizon Compression to schedS when computing scheduling retrievability R_sched:
+    const examMs = new Date(settings.examDate).getTime();
+    const daysToExam = (examMs - nowMs) / 86400000;
+    const lastTs = Number(chapter.lastReviewTimestamp) || Number(chapter.createdAt) || nowMs;
+    const daysRemAtLast = (examMs - lastTs) / 86400000;
+    const { wd, Fd } = getDecayParams(chapter.D);
+    let schedS = Math.max(0.1, (Number(chapter.S) || 1.0) * getTheta(chapter, settings));
+    if (daysToExam > 0 && daysRemAtLast > 0 && schedS > daysRemAtLast * 0.85) {
+      schedS = Math.max(0.5, daysRemAtLast * 0.78);
+    }
+    const R_sched = clamp(0.01, 1.0, Math.pow(1 + Fd * (elapsedDays / schedS), -wd));
+
+    const overdueRatio = (1 - R_sched) / Math.max(0.01, 1 - R_req);
+    const excessDecay = Math.max(0, R_req - R_sched - 0.18);
     const rescueWindowAttenuator = Math.exp(-2.5 * Math.pow(excessDecay, 2));
     const weightage = Number(chapter.weightage) || 1.0;
     const priority = weightage * overdueRatio * rescueWindowAttenuator;
 
     let statusCategory = "HEALTHY";
-    if (R < 0.65) statusCategory = "LAPSED_REBUILD";
-    else if (R <= 0.82) statusCategory = "CRITICAL_RESCUE";
-    else if (R <= R_req + 0.01) statusCategory = "DUE_TODAY";
+    if (R_sched < 0.65) statusCategory = "LAPSED_REBUILD";
+    else if (R_sched <= 0.82) statusCategory = "CRITICAL_RESCUE";
+    else if (R_sched <= R_req + 0.01) statusCategory = "DUE_TODAY";
 
     return {
       priority: Math.round(priority * 1000) / 1000,
@@ -152,7 +189,12 @@ const DSREngine = (function () {
     const rawTotalProblems = Number(inputs.totalProblems) || 0;
     const d0Val = Number(chapter.D0) || 5.0;
     const isSubtopic = !!chapter.isSubtopic;
-    const tierInfo = getSessionTier(chapter.S, R_last, isSubtopic);
+    const tierInfo = getSessionTier(chapter.S, R_last, isSubtopic, chapter.tauEWMA, d0Val);
+
+    const defaultTau = d0Val <= 6.0 ? 2.0 : 1.2;
+    const tauBaseline = clamp(0.4, 10.0, Number(chapter.tauBaseline) || Number(chapter.tauEWMA) || defaultTau);
+    let newTauEWMA = clamp(0.4, 10.0, Number(chapter.tauEWMA) || tauBaseline);
+    let tauActual = newTauEWMA;
 
     let P_true = 1.0;
     let P_adj = 1.0;
@@ -196,13 +238,18 @@ const DSREngine = (function () {
         Q = Math.min(2.85, Q);
       }
 
-      // Velocity Factor V_n
+      // Velocity Factor V_n & Statistical Time Engine
       const durationMins = Number(inputs.durationMins) || tierInfo.durationMins;
-      const problemSolvingMins = Math.max(2, durationMins - tierInfo.blankPageMins);
-      const tauActual = problemSolvingMins / N_total;
-      const baseTau = d0Val <= 6.0 ? 2.0 : 1.2;
-      const tauTarget = baseTau * rigor.tauMult;
+      const problemSolvingMins = Math.max(1, durationMins - tierInfo.blankPageMins);
+      tauActual = problemSolvingMins / N_total;
+
+      // 1. Velocity V_n compares actual problem speed against user's baseline prediction (scaled by rigor.tauMult)
+      const tauTarget = tauBaseline * rigor.tauMult;
       V_n = clamp(0.75, 1.15, Math.pow(tauTarget / tauActual, 0.35));
+
+      // 2. Update Statistical Time Prediction using 0.6 Predicted + 0.4 Actual EWMA
+      const clampedActual = clamp(0.3, 12.0, tauActual);
+      newTauEWMA = Math.round((0.60 * newTauEWMA + 0.40 * clampedActual) * 100) / 100;
 
       // Only grant >1.0x Rigor Bonus if P_true >= 35%
       effectiveRigorBonus = (rigor.stabilityBonus > 1.0 && P_true < 0.35) ? 1.0 : rigor.stabilityBonus;
@@ -243,12 +290,10 @@ const DSREngine = (function () {
         passed = true;
         growth *= 0.35;
         S_new = (Number(chapter.S) || 1.0) * (1 + Math.max(0.05, growth));
-        chapter.lastDirectS = Math.round(S_new * 100) / 100;
       } else if (Q >= 3.0 && !tier3Failed) {
         // Borderline Pass (3.0 <= Q < 3.5): contract S_new to re-verify sooner
         passed = true;
         S_new = Math.max(2.0, (Number(chapter.S) || 1.0) * 0.80);
-        chapter.lastDirectS = Math.round(S_new * 100) / 100;
       } else {
         // Fail: run standard S_fail equation once (no double crush)
         passed = false;
@@ -264,7 +309,6 @@ const DSREngine = (function () {
       const synthesisBonus = inputs.isSynthesisBattle ? 1.25 : 1.0;
       const growth = baseGrowth * strainFactor * w_Q * V_n * synthesisBonus * effectiveRigorBonus;
       S_new = (Number(chapter.S) || 1.0) * (1 + Math.max(0.10, growth));
-      chapter.lastDirectS = Math.round(S_new * 100) / 100;
     } else {
       newLapses += 1;
       const w_fail = Q >= 2.0 ? 1.0 : 0.60;
@@ -324,9 +368,12 @@ const DSREngine = (function () {
       D_new,
       newHazardIndex,
       newLapses,
-      newTierInfo: getSessionTier(S_new, 1.0, isSubtopic),
+      newTierInfo: getSessionTier(S_new, 1.0, isSubtopic, newTauEWMA, d0Val),
       newThetaLogic,
-      newThetaRote
+      newThetaRote,
+      newTauEWMA,
+      oldTauEWMA: Number(chapter.tauEWMA) || tauBaseline,
+      tauActual: Math.round(tauActual * 100) / 100
     };
   }
 
@@ -339,10 +386,9 @@ const DSREngine = (function () {
 
     const curD = Number(parentChapter.D) || 5.0;
     const curS = Number(parentChapter.S) || 1.0;
-    const w_Q = 0.35 * 4.0 - 0.40;
-    const strainBoost = Math.exp(1.1 * (1 - R_P)) - 1;
-    const deltaS_P = curS * 2.1 * Math.pow(curD, -0.25) * Math.pow(curS, -0.14) * strainBoost * w_Q;
-    const boost = deltaS_P * couplingWeight * (1 - R_P);
+    const parentBaseGrowth = 2.25 * Math.pow(curD, -0.28) * Math.pow(Math.max(1, curS), -0.16);
+    const decayScaling = clamp(0.15, 1.20, (1 - R_P) / 0.10);
+    const boost = curS * parentBaseGrowth * couplingWeight * decayScaling * 0.45;
 
     const lastDirect = Number(parentChapter.lastDirectS) || curS;
     const ceiling = 1.25 * lastDirect;

@@ -227,7 +227,7 @@
     const effectiveR_req = DSREngine.getEffectiveTargetRetention(settings, now);
     el.bannerTargetRetention.textContent = `${Math.round(effectiveR_req * 100)}%`;
 
-    // 2. Normalized Weighted Syllabus Readiness (Requirement 5.1)
+    // 2. Normalized Weighted Syllabus Readiness (Requirement 5.1 & Patch 5)
     const activeChapters = DSRStore.getActiveChapters(chapters);
     const groupCounts = {};
     activeChapters.forEach((c) => {
@@ -241,17 +241,22 @@
     let dueTodayCount = 0;
 
     activeChapters.forEach((ch) => {
-      const effWeight = ch.groupId ? (Number(ch.weightage) || 1.0) / (groupCounts[ch.groupId] || 1) : (Number(ch.weightage) || 1.0);
+      const groupCount = ch.groupId ? (groupCounts[ch.groupId] || 1) : 1;
+      const effectiveWeight = (Number(ch.weightage) || 1.0) / Math.max(1, groupCount);
+      const { R: R_bio } = DSREngine.getRetrievability(ch, settings, now);
       const triage = DSREngine.calculatePriorityScore(ch, settings, now);
-      totalEffectiveWeight += effWeight;
-      weightedHealthSum += effWeight * triage.R;
+      totalEffectiveWeight += effectiveWeight;
+      weightedHealthSum += effectiveWeight * R_bio;
       if (triage.statusCategory !== "HEALTHY") {
         dueTodayCount++;
       }
     });
 
-    const healthPct = totalEffectiveWeight > 0 ? Math.round((weightedHealthSum / totalEffectiveWeight) * 100) : 100;
+    const healthPct = totalEffectiveWeight > 0 ? Math.round((weightedHealthSum / Math.max(0.001, totalEffectiveWeight)) * 100) : 100;
     el.bannerHealthPct.textContent = `${healthPct}% (${dueTodayCount} Due)`;
+    if (document.getElementById("headerReadinessVal")) {
+      document.getElementById("headerReadinessVal").textContent = `${healthPct}%`;
+    }
     el.bannerHealthFill.style.width = `${healthPct}%`;
 
     // 3. Synthesis Boss Battle Detection Window (Requirement 2.3 & 5.4)
@@ -1829,25 +1834,58 @@
       }
     }
 
-    // If Synthesis Boss Battle, complete partner Parent chapter as well (Requirement 1)
-    let partnerChapter = null;
-    let partnerOutcome = null;
-    if (isSynthesisSession && currentSynthesisPartnerId) {
-      partnerChapter = state.chapters.find((c) => c.id === currentSynthesisPartnerId);
-      if (partnerChapter) {
-        partnerOutcome = DSREngine.evaluateStudySession(partnerChapter, inputs, state.settings, now);
-        partnerChapter.S = partnerOutcome.S_new;
-        partnerChapter.D = partnerOutcome.D_new;
-        partnerChapter.lastReviewTimestamp = now;
-        partnerChapter.lastDirectReviewTimestamp = now;
-        partnerChapter.lastDirectS = partnerOutcome.S_new;
-        partnerChapter.hazardIndex = partnerOutcome.newHazardIndex;
-        partnerChapter.lapses = partnerOutcome.newLapses;
-        partnerChapter.forcedUrgent = false;
-        if (partnerOutcome.newTauEWMA) {
-          partnerChapter.tauEWMA = partnerOutcome.newTauEWMA;
-        }
+    // If Synthesis Boss Battle, complete all partner chapters in the active cluster (Requirement 4)
+    const synthesisPartners = [];
+    if (isSynthesisSession) {
+      const active = DSRStore.getActiveChapters(state.chapters);
+      const clusterIds = new Set();
+      if (currentSynthesisPartnerId) {
+        clusterIds.add(currentSynthesisPartnerId);
       }
+
+      // Find chapters linked by parent-child bonds with due dates within 4 days
+      (chapter.parents || []).forEach((link) => {
+        const pch = active.find((c) => c.id === link.parentId);
+        if (pch) {
+          const pInterval = DSREngine.calculateNextIntervalDays(pch, state.settings, now);
+          const pElapsed = (now - (Number(pch.lastReviewTimestamp) || Number(pch.createdAt) || now)) / 86400000;
+          const dueInDays = pInterval - pElapsed;
+          if (dueInDays <= 4 || pch.id === currentSynthesisPartnerId) {
+            clusterIds.add(pch.id);
+          }
+        }
+      });
+
+      active.forEach((c) => {
+        if (Array.isArray(c.parents) && c.parents.some((p) => p.parentId === chapter.id)) {
+          const cInterval = DSREngine.calculateNextIntervalDays(c, state.settings, now);
+          const cElapsed = (now - (Number(c.lastReviewTimestamp) || Number(c.createdAt) || now)) / 86400000;
+          const dueInDays = cInterval - cElapsed;
+          if (dueInDays <= 4 || c.id === currentSynthesisPartnerId) {
+            clusterIds.add(c.id);
+          }
+        }
+      });
+
+      clusterIds.delete(chapter.id);
+      clusterIds.forEach((pid) => {
+        const partner = state.chapters.find((c) => c.id === pid);
+        if (partner) {
+          const pOutcome = DSREngine.evaluateStudySession(partner, { ...inputs, isSynthesisBattle: true }, state.settings, now);
+          partner.S = pOutcome.S_new;
+          partner.D = pOutcome.D_new;
+          partner.lastReviewTimestamp = now;
+          partner.lastDirectReviewTimestamp = now;
+          partner.lastDirectS = pOutcome.S_new;
+          partner.hazardIndex = pOutcome.newHazardIndex;
+          partner.lapses = pOutcome.newLapses;
+          partner.forcedUrgent = false;
+          if (pOutcome.newTauEWMA) {
+            partner.tauEWMA = pOutcome.newTauEWMA;
+          }
+          synthesisPartners.push(partner);
+        }
+      });
     }
 
     // Evaluate Fault-Line Vault Checklist & Graduation (Severity Aware)
@@ -1906,7 +1944,7 @@
     const parentBoostsSummary = [];
     if (outcome.passed && !outcome.isCryoFreeze && Array.isArray(chapter.parents)) {
       chapter.parents.forEach((link) => {
-        if (isSynthesisSession && link.parentId === currentSynthesisPartnerId) {
+        if (isSynthesisSession && (link.parentId === currentSynthesisPartnerId || synthesisPartners.some((p) => p.id === link.parentId))) {
           // Already fully updated via Synthesis Battle completion
           return;
         }
@@ -2466,6 +2504,12 @@
       targets.forEach((chapter) => {
         const oldS = chapter.S;
 
+        if (Number(vals.attempted) > 0) {
+          const mockSillyRate = Number(vals.sillySlips || 0) / Number(vals.attempted);
+          const oldHazard = Number(chapter.hazardIndex) || 0;
+          chapter.hazardIndex = Math.round((0.70 * oldHazard + 0.30 * mockSillyRate) * 1000) / 1000;
+        }
+
         if (vals.conceptLapses >= 1) {
           // Concept Failure -> Emergency Decay Interception without pre-crushing S
           chapter.forcedUrgent = true;
@@ -2478,7 +2522,8 @@
           affectedSummaries.push({
             chapter: chapter.name,
             impact: "Emergency Interception (R set to 0.78, forcedUrgent enabled)",
-            lapses: chapter.lapses
+            lapses: chapter.lapses,
+            hazardIndex: chapter.hazardIndex
           });
         } else if (vals.attempted >= 2 && vals.conceptLapses === 0) {
           // Aced under pressure
@@ -2489,14 +2534,13 @@
             chapter: chapter.name,
             impact: `Aced Under Pressure (+${tInfo.bonusPct}% Stability Boost)`,
             S_old: oldS,
-            S_new: chapter.S
+            S_new: chapter.S,
+            hazardIndex: chapter.hazardIndex
           });
         } else {
           // Partial Pass
           const elapsed = Math.max(0, now - chapter.lastReviewTimestamp);
           chapter.lastReviewTimestamp = now - Math.round(elapsed * 0.70);
-          const attCount = Math.max(1, vals.attempted || 1);
-          chapter.hazardIndex = Math.round((0.7 * (chapter.hazardIndex || 0) + 0.3 * (vals.sillySlips / attCount)) * 1000) / 1000;
           affectedSummaries.push({
             chapter: chapter.name,
             impact: "Partial Pass Relief Shift",

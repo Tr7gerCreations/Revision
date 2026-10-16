@@ -1824,14 +1824,12 @@
 
     if (outcome.isCryoFreeze) {
       // 10-Min Cryo-Freeze Refresher: Advance lastReviewTimestamp by buffer days, keep lastDirectReviewTimestamp intact
-      const shiftMs = (outcome.cryoShiftDays || 0) * 86400000;
-      chapter.lastReviewTimestamp = (Number(chapter.lastReviewTimestamp) || now) + shiftMs;
+      const shiftMs = (outcome.cryoShiftDays || 3) * 86400000;
+      chapter.lastReviewTimestamp = Math.min(now, (Number(chapter.lastReviewTimestamp) || now) + shiftMs);
     } else {
       chapter.lastReviewTimestamp = now;
       chapter.lastDirectReviewTimestamp = now;
-      if (outcome.passed) {
-        chapter.lastDirectS = outcome.S_new;
-      }
+      chapter.lastDirectS = outcome.S_new;
     }
 
     // If Synthesis Boss Battle, complete all partner chapters in the active cluster (Requirement 4)
@@ -1957,10 +1955,10 @@
           // Bounded upward shift: max 0.15 * coupling * S, capped at lastDirect + 0.35 * S
           const coupling = Number(link.couplingWeight) || 0.45;
           const singleShiftMs = 0.15 * coupling * (Number(pChapter.S) || 1.0) * 86400000;
-          const lastDirectTs = Number(pChapter.lastDirectReviewTimestamp) || Number(pChapter.lastReviewTimestamp) || now;
-          const maxAllowedTs = lastDirectTs + ((Number(pChapter.S) || 1.0) * 0.35 * 86400000);
+          const directBase = Number(pChapter.lastDirectReviewTimestamp) || Number(pChapter.lastReviewTimestamp) || now;
+          const maxAllowedShift = directBase + ((Number(pChapter.S) || 1) * 0.35 * 86400000);
           const currentParentTs = Number(pChapter.lastReviewTimestamp) || now;
-          const shiftedTs = Math.min(maxAllowedTs, currentParentTs + singleShiftMs);
+          const shiftedTs = Math.min(maxAllowedShift, currentParentTs + singleShiftMs);
           pChapter.lastReviewTimestamp = shiftedTs;
 
           parentBoostsSummary.push({
@@ -1982,8 +1980,8 @@
 
     // Online gradient descent updates for personal calibration scalars
     if (!outcome.isCryoFreeze) {
-      state.settings.thetaLogic = outcome.newThetaLogic;
-      state.settings.thetaRote = outcome.newThetaRote;
+      if (outcome.newThetaLogic !== undefined) state.settings.thetaLogic = outcome.newThetaLogic;
+      if (outcome.newThetaRote !== undefined) state.settings.thetaRote = outcome.newThetaRote;
       state.settings.totalReviewsLogged = (state.settings.totalReviewsLogged || 0) + 1;
     }
 

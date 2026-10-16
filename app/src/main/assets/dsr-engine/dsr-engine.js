@@ -240,7 +240,7 @@ const DSREngine = (function () {
 
       // Velocity Factor V_n & Statistical Time Engine
       const durationMins = Number(inputs.durationMins) || tierInfo.durationMins;
-      const problemSolvingMins = Math.max(1, durationMins - tierInfo.blankPageMins);
+      const problemSolvingMins = Math.max(2, durationMins - tierInfo.blankPageMins);
       tauActual = problemSolvingMins / N_total;
 
       // 1. Velocity V_n compares actual problem speed against user's baseline prediction (scaled by rigor.tauMult)
@@ -265,7 +265,7 @@ const DSREngine = (function () {
     const R_req = getEffectiveTargetRetention(settings, nowMs);
     const targetDrop = Math.max(0.04, 1 - R_req);
     const wrongTotal = rawTotalProblems > 0 ? (rawTotalProblems - (Number(inputs.correctProblems) || 0)) : 0;
-    const tier3Failed = (tierInfo.tier === 3) && (B <= (inputs.rigorTier >= 3 ? 2 : 3) || (rawTotalProblems > 0 && wrongTotal >= (inputs.rigorTier >= 3 ? 3 : 2)));
+    const tier3Failed = (tierInfo.tier === 3) && (B <= 2 || (rawTotalProblems > 0 && wrongTotal >= 2));
 
     let passed = (Q >= 3.0) && !tier3Failed;
     let S_new = Number(chapter.S) || 1.0;
@@ -302,22 +302,22 @@ const DSREngine = (function () {
         const S_fail = 0.85 * Math.pow(Number(chapter.D) || 5.0, -0.40) * Math.pow(Math.max(1, Number(chapter.S) || 1.0), 0.35) * Math.exp(-0.30 * (1 - R_last)) * w_fail;
         S_new = clamp(0.50, (Number(chapter.S) || 1.0) * 0.75, S_fail);
       }
-    } else if (passed) {
+    } else if (passed && !tier3Failed) {
       const w_Q = 0.45 * Q - 0.80;
       const strainFactor = clamp(0.20, 2.20, Math.pow((1 - R_last) / targetDrop, 0.65));
       const baseGrowth = 2.25 * Math.pow(Number(chapter.D) || 5.0, -0.28) * Math.pow(Math.max(1, Number(chapter.S) || 1.0), -0.16);
       const synthesisBonus = inputs.isSynthesisBattle ? 1.25 : 1.0;
       const growth = baseGrowth * strainFactor * w_Q * V_n * synthesisBonus * effectiveRigorBonus;
       S_new = (Number(chapter.S) || 1.0) * (1 + Math.max(0.10, growth));
+    } else if (tier3Failed && Q >= 2.6) {
+      passed = false;
+      newLapses += 1;
+      S_new = clamp(15.0, 32.0, (Number(chapter.S) || 1.0) * 0.55);
     } else {
       newLapses += 1;
       const w_fail = Q >= 2.0 ? 1.0 : 0.60;
       const S_fail = 0.85 * Math.pow(Number(chapter.D) || 5.0, -0.40) * Math.pow(Math.max(1, Number(chapter.S) || 1.0), 0.35) * Math.exp(-0.30 * (1 - R_last)) * w_fail;
-      if (tierInfo.tier === 3 && Q >= 2.75) {
-        S_new = clamp(16.0, (Number(chapter.S) || 1.0) * 0.85, Number(chapter.S) || 1.0);
-      } else {
-        S_new = clamp(0.50, (Number(chapter.S) || 1.0) * 0.75, S_fail);
-      }
+      S_new = clamp(0.50, (Number(chapter.S) || 1.0) * 0.75, S_fail);
     }
     S_new = Math.round(S_new * 100) / 100;
 
@@ -388,7 +388,7 @@ const DSREngine = (function () {
     const curS = Number(parentChapter.S) || 1.0;
     const parentBaseGrowth = 2.25 * Math.pow(curD, -0.28) * Math.pow(Math.max(1, curS), -0.16);
     const decayScaling = clamp(0.15, 1.20, (1 - R_P) / 0.10);
-    const boost = curS * parentBaseGrowth * couplingWeight * decayScaling * 0.45;
+    const boost = curS * parentBaseGrowth * couplingWeight * decayScaling;
 
     const lastDirect = Number(parentChapter.lastDirectS) || curS;
     const ceiling = 1.25 * lastDirect;
